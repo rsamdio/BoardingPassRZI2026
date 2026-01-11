@@ -259,20 +259,5 @@ function handleLogout() {
     App.handleLogout();
 }
 
-// Show Privacy Policy modal
-function showPrivacyPolicy(event) {
-    if (event) event.preventDefault();
-    const modal = document.getElementById('modal-privacy-policy');
-    if (modal) {
-        modal.classList.remove('hidden');
-    }
-}
-
-// Show Terms of Service modal
-function showTermsOfService(event) {
-    if (event) event.preventDefault();
-    const modal = document.getElementById('modal-terms-of-service');
-    if (modal) {
-        modal.classList.remove('hidden');
-    }
-}
+// Privacy Policy and Terms of Service are now separate pages (privacy.html and terms.html)
+// Links are updated in index.html to point to these pages

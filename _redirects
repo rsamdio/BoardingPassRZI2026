@@ -1,0 +1,2 @@
+# Redirect default Netlify subdomain to primary domain
+https://boardingpassrzi.netlify.app/* https://bp.rotaractinstitute.com/:splat 301!

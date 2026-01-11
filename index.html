@@ -9,8 +9,8 @@
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
     
     <!-- Canonical and Sharing -->
-    <link rel="canonical" href="https://pass.rotaractinstitute.com/" />
-    <meta property="og:url" content="https://pass.rotaractinstitute.com/" />
+    <link rel="canonical" href="https://bp.rotaractinstitute.com/" />
+    <meta property="og:url" content="https://bp.rotaractinstitute.com/" />
     <meta property="og:title" content="Boarding Pass - Rotaract Zone Institute 2026 Chennai" />
     <meta property="og:type" content="website" />
     <meta property="og:image" content="og-image.webp" />
@@ -159,9 +159,9 @@
             <div class="mt-8 text-center">
                 <p class="text-white/80 text-xs mb-3">By signing in, you agree to our</p>
                 <div class="flex items-center justify-center gap-4 text-xs">
-                    <a href="#" onclick="showPrivacyPolicy(event)" class="text-white/90 hover:text-white underline underline-offset-2 transition-colors">Privacy Policy</a>
+                    <a href="privacy.html" target="_blank" class="text-white/90 hover:text-white underline underline-offset-2 transition-colors">Privacy Policy</a>
                     <span class="text-white/60">•</span>
-                    <a href="#" onclick="showTermsOfService(event)" class="text-white/90 hover:text-white underline underline-offset-2 transition-colors">Terms of Service</a>
+                    <a href="terms.html" target="_blank" class="text-white/90 hover:text-white underline underline-offset-2 transition-colors">Terms of Service</a>
                 </div>
             </div>
         </div>
@@ -516,103 +516,6 @@
             <h3 class="font-bold text-xl text-slate-800 mb-2">Access Denied</h3>
             <p class="text-slate-600 mb-6">You are not authorized to access this application. Please contact an administrator to be added to the attendee list.</p>
             <button onclick="closeModal('modal-access-denied')" class="w-full bg-rota-pink text-white font-bold py-3 rounded-xl shadow-lg">OK</button>
-        </div>
-    </div>
-
-    <!-- PRIVACY POLICY MODAL -->
-    <div id="modal-privacy-policy" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div class="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
-            <div class="p-6 border-b border-slate-100 flex justify-between items-center shrink-0">
-                <h3 class="font-bold text-xl text-slate-800">Privacy Policy</h3>
-                <button onclick="closeModal('modal-privacy-policy')" class="w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors"><i class="fas fa-times"></i></button>
-            </div>
-            <div class="overflow-y-auto p-6 flex-1">
-                <div class="prose prose-sm max-w-none text-slate-700">
-                    <p class="text-sm text-slate-600 mb-4"><strong>Last Updated:</strong> January 2026</p>
-                    
-                    <h4 class="font-bold text-slate-800 mt-6 mb-3">1. Information We Collect</h4>
-                    <p class="text-sm text-slate-600 mb-4">We collect information that you provide directly to us, including your name, email address, district, designation, and profile information when you register and use the Boarding Pass application for Rotaract Zone Institute 2026 Chennai.</p>
-                    
-                    <h4 class="font-bold text-slate-800 mt-6 mb-3">2. How We Use Your Information</h4>
-                    <p class="text-sm text-slate-600 mb-4">We use the information we collect to:</p>
-                    <ul class="text-sm text-slate-600 mb-4 list-disc list-inside space-y-1">
-                        <li>Provide, maintain, and improve our services for Rotaract Zone Institute 2026 Chennai</li>
-                        <li>Process your participation in quizzes, tasks, and forms</li>
-                        <li>Calculate and display your points and leaderboard ranking</li>
-                        <li>Send you notifications and updates about the event and application</li>
-                        <li>Comply with legal obligations</li>
-                    </ul>
-                    
-                    <h4 class="font-bold text-slate-800 mt-6 mb-3">3. Data Storage and Security</h4>
-                    <p class="text-sm text-slate-600 mb-4">Your data is stored securely using Firebase services. We implement appropriate technical and organizational measures to protect your personal information against unauthorized access, alteration, disclosure, or destruction.</p>
-                    
-                    <h4 class="font-bold text-slate-800 mt-6 mb-3">4. Data Sharing</h4>
-                    <p class="text-sm text-slate-600 mb-4">We do not sell, trade, or rent your personal information to third parties. Your information may be shared with other participants in the Boarding Pass application for leaderboard and directory purposes, as part of the application's core functionality for Rotaract Zone Institute 2026 Chennai.</p>
-                    
-                    <h4 class="font-bold text-slate-800 mt-6 mb-3">5. Your Rights</h4>
-                    <p class="text-sm text-slate-600 mb-4">You have the right to access, update, or delete your personal information. You can do this through the application settings or by contacting the Rotaract Zone Institute 2026 Chennai administrators.</p>
-                    
-                    <h4 class="font-bold text-slate-800 mt-6 mb-3">6. Contact Us</h4>
-                    <p class="text-sm text-slate-600 mb-4">If you have any questions about this Privacy Policy, please contact the Rotaract Zone Institute 2026 Chennai administrators.</p>
-                </div>
-            </div>
-            <div class="p-6 border-t border-slate-100 shrink-0">
-                <button onclick="closeModal('modal-privacy-policy')" class="w-full bg-rota-pink text-white font-bold py-3 rounded-xl shadow-lg">I Understand</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- TERMS OF SERVICE MODAL -->
-    <div id="modal-terms-of-service" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div class="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
-            <div class="p-6 border-b border-slate-100 flex justify-between items-center shrink-0">
-                <h3 class="font-bold text-xl text-slate-800">Terms of Service</h3>
-                <button onclick="closeModal('modal-terms-of-service')" class="w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors"><i class="fas fa-times"></i></button>
-            </div>
-            <div class="overflow-y-auto p-6 flex-1">
-                <div class="prose prose-sm max-w-none text-slate-700">
-                    <p class="text-sm text-slate-600 mb-4"><strong>Last Updated:</strong> January 2026</p>
-                    
-                    <h4 class="font-bold text-slate-800 mt-6 mb-3">1. Acceptance of Terms</h4>
-                    <p class="text-sm text-slate-600 mb-4">By accessing and using the Boarding Pass application for Rotaract Zone Institute 2026 Chennai, you accept and agree to be bound by the terms and provision of this agreement.</p>
-                    
-                    <h4 class="font-bold text-slate-800 mt-6 mb-3">2. Use License</h4>
-                    <p class="text-sm text-slate-600 mb-4">Permission is granted to temporarily use the Boarding Pass application for Rotaract Zone Institute 2026 Chennai for personal, non-commercial transitory viewing only. This is the grant of a license, not a transfer of title, and under this license you may not:</p>
-                    <ul class="text-sm text-slate-600 mb-4 list-disc list-inside space-y-1">
-                        <li>Modify or copy the materials</li>
-                        <li>Use the materials for any commercial purpose or for any public display</li>
-                        <li>Attempt to reverse engineer any software contained in the application</li>
-                        <li>Remove any copyright or other proprietary notations from the materials</li>
-                    </ul>
-                    
-                    <h4 class="font-bold text-slate-800 mt-6 mb-3">3. User Conduct</h4>
-                    <p class="text-sm text-slate-600 mb-4">You agree to use the Boarding Pass application in a manner consistent with all applicable laws and regulations and in accordance with Rotaract values and principles. You agree not to:</p>
-                    <ul class="text-sm text-slate-600 mb-4 list-disc list-inside space-y-1">
-                        <li>Submit false, misleading, or fraudulent information</li>
-                        <li>Interfere with or disrupt the application or servers</li>
-                        <li>Attempt to gain unauthorized access to any portion of the application</li>
-                        <li>Engage in any activity that could harm other users or the application</li>
-                    </ul>
-                    
-                    <h4 class="font-bold text-slate-800 mt-6 mb-3">4. Points and Leaderboard</h4>
-                    <p class="text-sm text-slate-600 mb-4">Points are awarded based on completion of activities as determined by Rotaract Zone Institute 2026 Chennai administrators. Leaderboard rankings are calculated automatically. All decisions regarding points and rankings are final.</p>
-                    
-                    <h4 class="font-bold text-slate-800 mt-6 mb-3">5. Content Submission</h4>
-                    <p class="text-sm text-slate-600 mb-4">By submitting content (quizzes, tasks, forms) through the Boarding Pass application, you grant Rotaract Zone Institute 2026 Chennai the right to use, display, and distribute such content within the application for the duration of the event.</p>
-                    
-                    <h4 class="font-bold text-slate-800 mt-6 mb-3">6. Account Termination</h4>
-                    <p class="text-sm text-slate-600 mb-4">We reserve the right to terminate or suspend your account and access to the Boarding Pass application immediately, without prior notice, for conduct that we believe violates these Terms of Service, Rotaract values, or is harmful to other users, us, or third parties.</p>
-                    
-                    <h4 class="font-bold text-slate-800 mt-6 mb-3">7. Limitation of Liability</h4>
-                    <p class="text-sm text-slate-600 mb-4">In no event shall Rotaract Zone Institute 2026 Chennai or its administrators be liable for any damages arising out of the use or inability to use the Boarding Pass application.</p>
-                    
-                    <h4 class="font-bold text-slate-800 mt-6 mb-3">8. Contact Information</h4>
-                    <p class="text-sm text-slate-600 mb-4">If you have any questions about these Terms of Service, please contact the Rotaract Zone Institute 2026 Chennai administrators.</p>
-                </div>
-            </div>
-            <div class="p-6 border-t border-slate-100 shrink-0">
-                <button onclick="closeModal('modal-terms-of-service')" class="w-full bg-rota-pink text-white font-bold py-3 rounded-xl shadow-lg">I Understand</button>
-            </div>
         </div>
     </div>
 
