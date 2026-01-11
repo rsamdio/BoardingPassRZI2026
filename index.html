@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Boarding Pass - Rotaract Zone Institute 2026 Chennai</title>
+    
+    <meta name="description" content="Boarding Pass for Rotaract Zone Institute 2026 Chennai. Stay tuned for updates." />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    
+    <!-- Canonical and Sharing -->
+    <link rel="canonical" href="https://pass.rotaractinstitute.com/" />
+    <meta property="og:url" content="https://pass.rotaractinstitute.com/" />
+    <meta property="og:title" content="Boarding Pass - Rotaract Zone Institute 2026 Chennai" />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="og-image.webp" />
+    <meta property="og:image:type" content="image/webp" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="600" />
+    <meta property="og:description" content="Boarding Pass for Rotaract Zone Institute 2026 Chennai. Stay tuned for updates." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Boarding Pass - Rotaract Zone Institute 2026 Chennai" />
+    <meta name="twitter:description" content="Boarding Pass for Rotaract Zone Institute 2026 Chennai. Stay tuned for updates." />
+    <meta name="twitter:image" content="og-image.webp" />
+    
+    
+    <!-- Favicons -->
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <link rel="apple-touch-icon" href="favicon.png" />
+    <!-- <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>"> -->
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-functions-compat.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        rota: {
+                            pink: '#D71947',
+                            blue: '#2563eb',
+                            green: '#22c55e',
+                            orange: '#f97316',
+                            magenta: '#c026d3',
+                            red: '#dc2626',
+                            cream: '#fffbeb',
+                            maroon: '#7f1d1d'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        .view-section { display: none !important; }
+        .view-section.active { display: flex !important; flex-direction: column; animation: fadeIn 0.3s ease-out; }
+        
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        
+        /* RZI Brand Gradients */
+        .gradient-hero {
+            background: linear-gradient(135deg, #2563eb 0%, #22c55e 50%, #f97316 100%);
+        }
+        .gradient-quiz {
+            background: linear-gradient(135deg, #9333ea 0%, #c026d3 100%);
+        }
+        .gradient-task {
+            background: linear-gradient(135deg, #f97316 0%, #dc2626 100%);
+        }
+        .gradient-form {
+            background: linear-gradient(135deg, #2563eb 0%, #22c55e 100%);
+        }
+        
+        /* Gradient shimmer for skeleton loaders */
+        @keyframes shimmer {
+            0% { background-position: -1000px 0; }
+            100% { background-position: 1000px 0; }
+        }
+        .gradient-shimmer {
+            background: linear-gradient(90deg, #f1f5f9 0%, #e2e8f0 50%, #f1f5f9 100%);
+            background-size: 1000px 100%;
+            animation: shimmer 2s infinite;
+        }
+        
+        /* Clock tower spinner */
+        @keyframes clockTower {
+            0%, 100% { transform: rotate(0deg); }
+            50% { transform: rotate(180deg); }
+        }
+        .clock-tower-spinner {
+            animation: clockTower 2s ease-in-out infinite;
+        }
+        
+        /* Skeleton loader */
+        .skeleton {
+            background: linear-gradient(90deg, #f1f5f9 0%, #e2e8f0 50%, #f1f5f9 100%);
+            background-size: 1000px 100%;
+            animation: shimmer 2s infinite;
+            border-radius: 0.5rem;
+        }
+        
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans h-screen w-screen overflow-hidden flex flex-col">
+
+    <!-- LOADING OVERLAY -->
+    <div id="app-loader" class="fixed inset-0 bg-white z-50 flex flex-col items-center justify-center transition-opacity duration-500">
+        <div class="w-12 h-12 border-4 border-rota-pink border-t-transparent rounded-full animate-spin mb-4"></div>
+        <p class="text-sm text-slate-500 font-medium">Loading App...</p>
+    </div>
+
+    <!-- HEADER -->
+    <header id="app-header" class="hidden bg-white shadow-sm z-20 px-4 py-3 flex justify-between items-center border-b border-slate-100 shrink-0">
+        <div class="flex items-center gap-2">
+            <img src="rzilogo.webp" alt="Rotaract Zone Institute" class="w-8 h-8 object-contain">
+            <h1 class="font-bold text-lg text-slate-800 tracking-tight">Boarding Pass</h1>
+        </div>
+        <div class="flex items-center gap-3">
+            <div class="flex items-center bg-amber-50 text-amber-700 px-2 py-1 rounded-full border border-amber-100 shadow-sm">
+                <i class="fas fa-star text-amber-500 text-xs mr-1"></i>
+                <span id="header-points" class="text-xs font-bold">0</span>
+            </div>
+            <img id="header-avatar" src="https://ui-avatars.com/api/?name=User" class="w-8 h-8 rounded-full border border-slate-200 cursor-pointer object-cover" onclick="navigateTo('profile')">
+        </div>
+    </header>
+
+    <!-- MAIN CONTENT -->
+    <main class="flex-1 overflow-y-auto no-scrollbar relative bg-slate-50 w-full">
+        
+        <!-- VIEW: LOGIN -->
+        <div id="view-login" class="view-section h-full items-center justify-center p-6 bg-gradient-to-br from-rota-pink to-rose-700 text-white">
+            <div class="w-40 h-auto mb-8 flex items-center justify-center">
+                <div class="bg-white rounded-2xl shadow-xl p-3 flex items-center justify-center">
+                    <img src="rzilogo.webp" alt="Rotaract Zone Institute 2026 Chennai" class="w-full h-auto object-contain max-w-[140px]">
+                </div>
+            </div>
+            <h1 class="text-4xl font-bold mb-2 tracking-tight">Boarding Pass</h1>
+            <p class="text-rose-100 mb-12 text-center text-sm opacity-90">Rotaract Zone Institute 2026 Chennai</p>
+            
+            <button onclick="handleLogin()" class="bg-white text-rota-pink font-bold py-4 px-8 rounded-2xl shadow-xl w-full max-w-xs flex items-center justify-center gap-3 transform active:scale-95 transition-all">
+                <i class="fab fa-google text-lg"></i> Sign in with Google
+            </button>
+            
+            <div class="mt-8 text-center">
+                <p class="text-white/80 text-xs mb-3">By signing in, you agree to our</p>
+                <div class="flex items-center justify-center gap-4 text-xs">
+                    <a href="#" onclick="showPrivacyPolicy(event)" class="text-white/90 hover:text-white underline underline-offset-2 transition-colors">Privacy Policy</a>
+                    <span class="text-white/60">•</span>
+                    <a href="#" onclick="showTermsOfService(event)" class="text-white/90 hover:text-white underline underline-offset-2 transition-colors">Terms of Service</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW: ONBOARDING -->
+        <div id="view-onboarding" class="view-section h-full bg-white p-6 justify-center overflow-y-auto">
+            <div class="max-w-md mx-auto w-full py-8">
+                <h2 class="text-3xl font-bold text-slate-800 mb-2">Welcome!</h2>
+                <p class="text-slate-500 mb-8">Let's set up your profile card.</p>
+                
+                <form onsubmit="handleOnboarding(event)" class="space-y-5">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Full Name</label>
+                        <input type="text" id="input-name" required placeholder="John Doe" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 font-medium focus:ring-2 focus:ring-rota-pink focus:border-transparent outline-none transition-all">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">District</label>
+                        <input type="text" id="input-district" required placeholder="RID 3190" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 font-medium focus:ring-2 focus:ring-rota-pink focus:border-transparent outline-none transition-all">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Designation</label>
+                        <input type="text" id="input-designation" required placeholder="Club President" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 font-medium focus:ring-2 focus:ring-rota-pink focus:border-transparent outline-none transition-all">
+                    </div>
+                    <button type="submit" class="w-full bg-rota-pink text-white font-bold py-4 rounded-xl shadow-lg mt-4 active:scale-95 transition-transform">
+                        Complete Setup
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- VIEW: HOME -->
+        <div id="view-home" class="view-section pb-24">
+            <!-- Hero Stats -->
+            <div class="gradient-hero text-white p-6 pb-16 rounded-b-[2.5rem] shadow-lg relative overflow-hidden shrink-0">
+                <div class="absolute -right-4 -top-4 text-white/10">
+                    <i class="fas fa-trophy text-[10rem]"></i>
+                </div>
+                <div class="relative z-10">
+                    <p class="text-white/90 text-sm font-medium mb-1">Your Rank</p>
+                    <div class="flex items-baseline gap-2 mb-4">
+                        <h2 class="text-5xl font-bold tracking-tighter" id="hero-rank">#--</h2>
+                        <span class="text-xl opacity-90 font-medium" id="hero-points-display">0 pts</span>
+                    </div>
+                    
+                    
+                    <!-- Quick Stats Cards -->
+                    <div class="grid grid-cols-3 gap-2 mb-4" id="quick-stats">
+                        <!-- Stats will be rendered here -->
+                    </div>
+                    
+                    <!-- Achievement Badges -->
+                    <div class="flex items-center gap-2 mb-4" id="achievement-badges">
+                        <!-- Badges will be rendered here -->
+                    </div>
+                    
+                    <div class="inline-flex items-center gap-2 bg-white/20 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10">
+                        <span class="w-2 h-2 rounded-full bg-green-400"></span>
+                        <span class="text-sm font-bold tracking-wide" id="hero-status">Active Participant</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pending Activities List -->
+            <div class="px-5 -mt-10 relative z-10">
+                <div class="bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden">
+                    <div class="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                        <h3 class="font-bold text-slate-700 flex items-center gap-2">
+                            <i class="fas fa-clipboard-check text-rota-pink"></i> Pending Missions
+                        </h3>
+                        <span class="text-[10px] font-bold text-white bg-rota-pink px-2 py-1 rounded-full shadow-sm animate-pulse">Action Required</span>
+                    </div>
+                    <div id="home-task-list" class="divide-y divide-slate-50">
+                        <!-- Activities rendered via JS -->
+                    </div>
+                </div>
+                
+                <!-- Leaderboard Link -->
+                <div class="mt-4 text-center">
+                    <button onclick="showLeaderboardModal()" class="text-xs text-slate-400 font-medium hover:text-rota-pink transition-colors">
+                        View Full Leaderboard <i class="fas fa-chevron-right ml-1"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW: DIRECTORY -->
+        <div id="view-directory" class="view-section p-4 pb-24 h-full">
+            <!-- Search Bar -->
+            <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-3 mb-4 shrink-0">
+                <div class="flex items-center gap-2">
+                    <div class="relative flex-1">
+                        <i class="fas fa-search absolute left-3 top-3 text-slate-400"></i>
+                        <input type="text" id="directory-search" placeholder="Search by name, district, designation..." 
+                               class="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-rota-pink focus:border-transparent outline-none">
+                    </div>
+                </div>
+                <div class="mt-2 text-xs text-slate-500">
+                    <span id="directory-count">0 participants</span>
+                </div>
+            </div>
+            
+            <!-- Directory Grid -->
+            <div id="directory-grid" class="grid grid-cols-2 gap-3 overflow-y-auto pb-20">
+                <!-- Cards rendered via JS -->
+            </div>
+            
+            <!-- Pagination -->
+            <div id="directory-pagination" class="mt-4 flex items-center justify-center gap-2 shrink-0">
+                <!-- Pagination controls rendered via JS -->
+            </div>
+        </div>
+
+        <!-- VIEW: ACTIVITIES -->
+        <div id="view-activities" class="view-section pb-24 h-full">
+            <div class="bg-white border-b border-slate-100 p-2 flex sticky top-0 z-10 shrink-0">
+                <button onclick="switchActivityTab('quizzes')" id="tab-btn-quizzes" class="flex-1 py-2.5 font-bold text-sm rounded-lg bg-rota-pink text-white shadow-sm transition-all">Quizzes</button>
+                <button onclick="switchActivityTab('tasks')" id="tab-btn-tasks" class="flex-1 py-2.5 font-bold text-sm rounded-lg text-slate-500 hover:bg-slate-50 transition-all">Tasks</button>
+                <button onclick="switchActivityTab('forms')" id="tab-btn-forms" class="flex-1 py-2.5 font-bold text-sm rounded-lg text-slate-500 hover:bg-slate-50 transition-all">Forms</button>
+                <button onclick="switchActivityTab('all')" id="tab-btn-all" class="flex-1 py-2.5 font-bold text-sm rounded-lg text-slate-500 hover:bg-slate-50 transition-all">All</button>
+            </div>
+
+            <!-- Filter Bar -->
+            <div class="bg-white border-b border-slate-100 p-3 sticky top-[3.5rem] z-10 shrink-0">
+                <div class="flex flex-wrap items-center gap-2">
+                    <input type="text" id="activity-search" placeholder="Search..." 
+                           class="flex-1 min-w-[150px] px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-rota-pink focus:border-transparent outline-none">
+                    <label class="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
+                        <input type="checkbox" id="show-completed-toggle" class="rounded text-rota-pink focus:ring-rota-pink">
+                        <span>Show Completed</span>
+                    </label>
+                </div>
+            </div>
+
+            <div id="activity-content-quizzes" class="p-4 space-y-4 overflow-y-auto">
+                <div id="quiz-list" class="space-y-4"></div>
+            </div>
+
+            <div id="activity-content-tasks" class="p-4 space-y-4 hidden overflow-y-auto">
+                <div id="task-list" class="space-y-4"></div>
+            </div>
+
+            <div id="activity-content-forms" class="p-4 space-y-4 hidden overflow-y-auto">
+                <div id="forms-list" class="space-y-4"></div>
+            </div>
+
+            <div id="activity-content-all" class="p-4 space-y-4 hidden overflow-y-auto">
+                <div id="all-activities-list" class="space-y-4"></div>
+            </div>
+        </div>
+
+        <!-- VIEW: PROFILE -->
+        <div id="view-profile" class="view-section p-4 pb-24 h-full overflow-y-auto">
+            <!-- Profile Header -->
+            <div class="flex flex-col items-center mb-6">
+                <div class="relative mb-4">
+                    <div class="absolute inset-0 bg-gradient-to-r from-rota-blue via-rota-green to-rota-orange rounded-full blur-lg opacity-20"></div>
+                    <img id="profile-avatar" src="" class="relative w-24 h-24 rounded-full border-4 border-white shadow-xl object-cover">
+                </div>
+                <h2 id="profile-name" class="text-xl font-bold text-slate-800 text-center mb-2">--</h2>
+                <div class="flex items-center gap-2 mb-4">
+                    <span id="profile-district" class="bg-slate-100 text-slate-600 text-xs font-bold px-2 py-1 rounded">--</span>
+                    <span id="profile-designation" class="bg-rose-100 text-rose-700 text-xs font-bold px-2 py-1 rounded uppercase">--</span>
+                </div>
+                <div class="text-center mb-6">
+                    <div class="text-3xl font-bold text-rota-pink mb-1" id="profile-points">0</div>
+                    <div class="text-xs text-slate-500">Total Points</div>
+                </div>
+            </div>
+            
+            <!-- Activity Statistics -->
+            <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-4 mb-4">
+                <h3 class="font-bold text-slate-800 mb-4 flex items-center gap-2">
+                    <i class="fas fa-chart-bar text-rota-pink"></i> Activity Statistics
+                </h3>
+                <div id="profile-stats" class="grid grid-cols-3 gap-4">
+                    <div class="text-center">
+                        <div class="text-2xl font-bold text-rota-pink">0</div>
+                        <div class="text-xs text-slate-500 mt-1">Quizzes</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-2xl font-bold text-rota-orange">0</div>
+                        <div class="text-xs text-slate-500 mt-1">Tasks</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-2xl font-bold text-rota-blue">0</div>
+                        <div class="text-xs text-slate-500 mt-1">Forms</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Achievements -->
+            <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-4 mb-4">
+                <h3 class="font-bold text-slate-800 mb-4 flex items-center gap-2">
+                    <i class="fas fa-trophy text-rota-orange"></i> Achievements
+                </h3>
+                <div id="profile-achievements" class="space-y-2">
+                    <p class="text-center text-slate-500 text-sm py-4">Complete activities to earn achievements!</p>
+                </div>
+            </div>
+            
+            <!-- User Info -->
+            <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-4 mb-4">
+                <div class="flex justify-between items-center py-2">
+                    <span class="text-slate-500 text-sm">Email</span>
+                    <span id="profile-email" class="font-bold text-slate-800 text-sm">--</span>
+                </div>
+            </div>
+
+            <!-- Sign Out -->
+            <button onclick="handleLogout()" class="w-full border-2 border-red-200 text-red-600 font-bold py-3 rounded-xl hover:bg-red-50 transition-colors mb-4">
+                Sign Out
+            </button>
+        </div>
+
+    </main>
+
+    <!-- BOTTOM NAV -->
+    <nav id="bottom-nav" class="hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-100 flex justify-around items-center h-[4.5rem] px-2 z-40 pb-safe shadow-[0_-5px_20px_rgba(0,0,0,0.02)]">
+        <button onclick="navigateTo('home')" class="nav-btn group flex flex-col items-center justify-center w-16 h-full" data-target="home">
+            <div class="w-10 h-8 rounded-full flex items-center justify-center mb-1 group-active:scale-90 transition-all nav-icon-bg">
+                <i class="fas fa-chart-pie text-xl nav-icon text-slate-300"></i>
+            </div>
+            <span class="text-[10px] font-bold nav-text text-slate-400">Home</span>
+        </button>
+        <button onclick="navigateTo('directory')" class="nav-btn group flex flex-col items-center justify-center w-16 h-full" data-target="directory">
+            <div class="w-10 h-8 rounded-full flex items-center justify-center mb-1 group-active:scale-90 transition-all nav-icon-bg">
+                <i class="fas fa-users text-xl nav-icon text-slate-300"></i>
+            </div>
+            <span class="text-[10px] font-bold nav-text text-slate-400">People</span>
+        </button>
+        <button onclick="navigateTo('activities')" class="nav-btn group flex flex-col items-center justify-center w-16 h-full" data-target="activities">
+            <div class="w-10 h-8 rounded-full flex items-center justify-center mb-1 group-active:scale-90 transition-all nav-icon-bg">
+                <i class="fas fa-bolt text-xl nav-icon text-slate-300"></i>
+            </div>
+            <span class="text-[10px] font-bold nav-text text-slate-400">Actions</span>
+        </button>
+        <button onclick="navigateTo('profile')" class="nav-btn group flex flex-col items-center justify-center w-16 h-full" data-target="profile">
+            <div class="w-10 h-8 rounded-full flex items-center justify-center mb-1 group-active:scale-90 transition-all nav-icon-bg">
+                <i class="fas fa-user text-xl nav-icon text-slate-300"></i>
+            </div>
+            <span class="text-[10px] font-bold nav-text text-slate-400">Me</span>
+        </button>
+    </nav>
+
+    <!-- TOAST -->
+    <div id="toast" class="fixed top-[-100px] left-1/2 transform -translate-x-1/2 bg-slate-900/90 backdrop-blur text-white px-6 py-3 rounded-full shadow-2xl z-[100] transition-all duration-300 flex items-center gap-3 w-max max-w-[90%]">
+        <i class="fas fa-check-circle text-green-400"></i>
+        <span id="toast-msg" class="text-sm font-medium">Notification</span>
+    </div>
+
+    <!-- LEADERBOARD MODAL -->
+    <div id="modal-leaderboard" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center sm:p-4">
+        <div class="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-sm h-[80vh] sm:h-auto flex flex-col shadow-2xl relative">
+            <div class="p-4 border-b border-slate-100 flex justify-between items-center">
+                <h3 class="font-bold text-lg text-slate-800">Top Leaders</h3>
+                <button onclick="closeModal('modal-leaderboard')" class="w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors"><i class="fas fa-times"></i></button>
+            </div>
+            <div id="modal-leaderboard-list" class="overflow-y-auto p-4 space-y-2 flex-1">
+                <!-- Leaderboard items rendered here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- QUIZ MODAL -->
+    <div id="modal-quiz" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl relative">
+            <div class="p-4 border-b border-slate-100 flex justify-between items-center shrink-0">
+                <div>
+                    <h3 id="quiz-modal-title" class="font-bold text-lg text-slate-800">Quiz</h3>
+                    <p id="quiz-timer" class="text-xs text-slate-500 mt-1"></p>
+                </div>
+                <button onclick="closeModal('modal-quiz')" class="w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors"><i class="fas fa-times"></i></button>
+            </div>
+            <div id="quiz-content" class="overflow-y-auto p-6 flex-1">
+                <!-- Quiz questions rendered here -->
+            </div>
+            <div class="p-4 border-t border-slate-100 shrink-0">
+                <button id="quiz-submit-btn" onclick="submitQuiz()" class="w-full bg-rota-pink text-white font-bold py-3 rounded-xl shadow-lg">Submit Quiz</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- UPLOAD MODAL -->
+    <div id="modal-upload" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl w-full max-w-sm p-6 relative shadow-2xl">
+            <button onclick="closeModal('modal-upload')" class="absolute top-4 right-4 w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors"><i class="fas fa-times"></i></button>
+            <h3 class="font-bold text-xl text-slate-800 mb-2">Submit Proof</h3>
+            <p id="upload-task-title" class="text-sm text-slate-500 mb-6">Task Name</p>
+            
+            <label class="block border-2 border-dashed border-slate-300 hover:border-rota-pink bg-slate-50 hover:bg-rose-50 rounded-2xl p-10 text-center cursor-pointer transition-colors mb-6 group">
+                <i class="fas fa-cloud-upload-alt text-3xl text-slate-300 group-hover:text-rota-pink mb-3 transition-colors"></i>
+                <p class="text-sm font-bold text-slate-400 group-hover:text-slate-600">Click to Select Image</p>
+                <input type="file" id="file-input" class="hidden" accept="image/*,.pdf" onchange="handleFileSelect(this)">
+            </label>
+            <div id="file-preview" class="hidden mb-4"></div>
+            <button id="submit-file-btn" onclick="submitTaskFile()" class="w-full bg-rota-pink text-white font-bold py-3 rounded-xl shadow-lg hidden">Submit</button>
+        </div>
+    </div>
+
+    <!-- TASK FORM MODAL (for task-type forms) -->
+    <div id="modal-task-form" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl relative">
+            <!-- Header (fixed) -->
+            <div class="p-6 border-b border-slate-100 flex justify-between items-center shrink-0">
+                <h3 id="task-form-modal-title" class="font-bold text-xl text-slate-800">Complete Form</h3>
+                <button onclick="closeModal('modal-task-form')" class="w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors"><i class="fas fa-times"></i></button>
+            </div>
+            <!-- Scrollable form content -->
+            <div class="flex-1 overflow-y-auto px-6 py-4">
+                <form id="task-form" onsubmit="submitTaskForm(event)" class="space-y-4">
+                    <!-- Form fields rendered here -->
+                </form>
+            </div>
+            <!-- Footer with submit button (fixed) -->
+            <div class="p-6 border-t border-slate-100 shrink-0">
+                <button type="submit" form="task-form" class="w-full bg-rota-pink text-white font-bold py-3 rounded-xl shadow-lg">Submit</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SURVEY/FORM MODAL (for standalone forms) -->
+    <div id="modal-survey-form" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl relative">
+            <!-- Header (fixed) -->
+            <div class="p-6 border-b border-slate-100 flex justify-between items-start shrink-0">
+                <div class="flex-1 pr-4">
+                    <h3 id="survey-form-modal-title" class="font-bold text-xl text-slate-800 mb-2">Survey</h3>
+                    <p id="survey-form-description" class="text-sm text-slate-500"></p>
+                </div>
+                <button onclick="closeModal('modal-survey-form')" class="w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors shrink-0"><i class="fas fa-times"></i></button>
+            </div>
+            <!-- Scrollable form content -->
+            <div class="flex-1 overflow-y-auto px-6 py-4">
+                <form id="survey-form" onsubmit="submitSurveyForm(event)" class="space-y-4">
+                    <!-- Form fields rendered here -->
+                </form>
+            </div>
+            <!-- Footer with submit button (fixed) -->
+            <div class="p-6 border-t border-slate-100 shrink-0">
+                <button type="submit" form="survey-form" class="w-full bg-rota-pink text-white font-bold py-3 rounded-xl shadow-lg">Submit</button>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- ACCESS DENIED MODAL -->
+    <div id="modal-access-denied" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl w-full max-w-sm p-6 relative shadow-2xl text-center">
+            <div class="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <i class="fas fa-exclamation-triangle text-red-500 text-2xl"></i>
+            </div>
+            <h3 class="font-bold text-xl text-slate-800 mb-2">Access Denied</h3>
+            <p class="text-slate-600 mb-6">You are not authorized to access this application. Please contact an administrator to be added to the attendee list.</p>
+            <button onclick="closeModal('modal-access-denied')" class="w-full bg-rota-pink text-white font-bold py-3 rounded-xl shadow-lg">OK</button>
+        </div>
+    </div>
+
+    <!-- PRIVACY POLICY MODAL -->
+    <div id="modal-privacy-policy" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
+            <div class="p-6 border-b border-slate-100 flex justify-between items-center shrink-0">
+                <h3 class="font-bold text-xl text-slate-800">Privacy Policy</h3>
+                <button onclick="closeModal('modal-privacy-policy')" class="w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="overflow-y-auto p-6 flex-1">
+                <div class="prose prose-sm max-w-none text-slate-700">
+                    <p class="text-sm text-slate-600 mb-4"><strong>Last Updated:</strong> January 2026</p>
+                    
+                    <h4 class="font-bold text-slate-800 mt-6 mb-3">1. Information We Collect</h4>
+                    <p class="text-sm text-slate-600 mb-4">We collect information that you provide directly to us, including your name, email address, district, designation, and profile information when you register and use the Boarding Pass application for Rotaract Zone Institute 2026 Chennai.</p>
+                    
+                    <h4 class="font-bold text-slate-800 mt-6 mb-3">2. How We Use Your Information</h4>
+                    <p class="text-sm text-slate-600 mb-4">We use the information we collect to:</p>
+                    <ul class="text-sm text-slate-600 mb-4 list-disc list-inside space-y-1">
+                        <li>Provide, maintain, and improve our services for Rotaract Zone Institute 2026 Chennai</li>
+                        <li>Process your participation in quizzes, tasks, and forms</li>
+                        <li>Calculate and display your points and leaderboard ranking</li>
+                        <li>Send you notifications and updates about the event and application</li>
+                        <li>Comply with legal obligations</li>
+                    </ul>
+                    
+                    <h4 class="font-bold text-slate-800 mt-6 mb-3">3. Data Storage and Security</h4>
+                    <p class="text-sm text-slate-600 mb-4">Your data is stored securely using Firebase services. We implement appropriate technical and organizational measures to protect your personal information against unauthorized access, alteration, disclosure, or destruction.</p>
+                    
+                    <h4 class="font-bold text-slate-800 mt-6 mb-3">4. Data Sharing</h4>
+                    <p class="text-sm text-slate-600 mb-4">We do not sell, trade, or rent your personal information to third parties. Your information may be shared with other participants in the Boarding Pass application for leaderboard and directory purposes, as part of the application's core functionality for Rotaract Zone Institute 2026 Chennai.</p>
+                    
+                    <h4 class="font-bold text-slate-800 mt-6 mb-3">5. Your Rights</h4>
+                    <p class="text-sm text-slate-600 mb-4">You have the right to access, update, or delete your personal information. You can do this through the application settings or by contacting the Rotaract Zone Institute 2026 Chennai administrators.</p>
+                    
+                    <h4 class="font-bold text-slate-800 mt-6 mb-3">6. Contact Us</h4>
+                    <p class="text-sm text-slate-600 mb-4">If you have any questions about this Privacy Policy, please contact the Rotaract Zone Institute 2026 Chennai administrators.</p>
+                </div>
+            </div>
+            <div class="p-6 border-t border-slate-100 shrink-0">
+                <button onclick="closeModal('modal-privacy-policy')" class="w-full bg-rota-pink text-white font-bold py-3 rounded-xl shadow-lg">I Understand</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- TERMS OF SERVICE MODAL -->
+    <div id="modal-terms-of-service" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
+            <div class="p-6 border-b border-slate-100 flex justify-between items-center shrink-0">
+                <h3 class="font-bold text-xl text-slate-800">Terms of Service</h3>
+                <button onclick="closeModal('modal-terms-of-service')" class="w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="overflow-y-auto p-6 flex-1">
+                <div class="prose prose-sm max-w-none text-slate-700">
+                    <p class="text-sm text-slate-600 mb-4"><strong>Last Updated:</strong> January 2026</p>
+                    
+                    <h4 class="font-bold text-slate-800 mt-6 mb-3">1. Acceptance of Terms</h4>
+                    <p class="text-sm text-slate-600 mb-4">By accessing and using the Boarding Pass application for Rotaract Zone Institute 2026 Chennai, you accept and agree to be bound by the terms and provision of this agreement.</p>
+                    
+                    <h4 class="font-bold text-slate-800 mt-6 mb-3">2. Use License</h4>
+                    <p class="text-sm text-slate-600 mb-4">Permission is granted to temporarily use the Boarding Pass application for Rotaract Zone Institute 2026 Chennai for personal, non-commercial transitory viewing only. This is the grant of a license, not a transfer of title, and under this license you may not:</p>
+                    <ul class="text-sm text-slate-600 mb-4 list-disc list-inside space-y-1">
+                        <li>Modify or copy the materials</li>
+                        <li>Use the materials for any commercial purpose or for any public display</li>
+                        <li>Attempt to reverse engineer any software contained in the application</li>
+                        <li>Remove any copyright or other proprietary notations from the materials</li>
+                    </ul>
+                    
+                    <h4 class="font-bold text-slate-800 mt-6 mb-3">3. User Conduct</h4>
+                    <p class="text-sm text-slate-600 mb-4">You agree to use the Boarding Pass application in a manner consistent with all applicable laws and regulations and in accordance with Rotaract values and principles. You agree not to:</p>
+                    <ul class="text-sm text-slate-600 mb-4 list-disc list-inside space-y-1">
+                        <li>Submit false, misleading, or fraudulent information</li>
+                        <li>Interfere with or disrupt the application or servers</li>
+                        <li>Attempt to gain unauthorized access to any portion of the application</li>
+                        <li>Engage in any activity that could harm other users or the application</li>
+                    </ul>
+                    
+                    <h4 class="font-bold text-slate-800 mt-6 mb-3">4. Points and Leaderboard</h4>
+                    <p class="text-sm text-slate-600 mb-4">Points are awarded based on completion of activities as determined by Rotaract Zone Institute 2026 Chennai administrators. Leaderboard rankings are calculated automatically. All decisions regarding points and rankings are final.</p>
+                    
+                    <h4 class="font-bold text-slate-800 mt-6 mb-3">5. Content Submission</h4>
+                    <p class="text-sm text-slate-600 mb-4">By submitting content (quizzes, tasks, forms) through the Boarding Pass application, you grant Rotaract Zone Institute 2026 Chennai the right to use, display, and distribute such content within the application for the duration of the event.</p>
+                    
+                    <h4 class="font-bold text-slate-800 mt-6 mb-3">6. Account Termination</h4>
+                    <p class="text-sm text-slate-600 mb-4">We reserve the right to terminate or suspend your account and access to the Boarding Pass application immediately, without prior notice, for conduct that we believe violates these Terms of Service, Rotaract values, or is harmful to other users, us, or third parties.</p>
+                    
+                    <h4 class="font-bold text-slate-800 mt-6 mb-3">7. Limitation of Liability</h4>
+                    <p class="text-sm text-slate-600 mb-4">In no event shall Rotaract Zone Institute 2026 Chennai or its administrators be liable for any damages arising out of the use or inability to use the Boarding Pass application.</p>
+                    
+                    <h4 class="font-bold text-slate-800 mt-6 mb-3">8. Contact Information</h4>
+                    <p class="text-sm text-slate-600 mb-4">If you have any questions about these Terms of Service, please contact the Rotaract Zone Institute 2026 Chennai administrators.</p>
+                </div>
+            </div>
+            <div class="p-6 border-t border-slate-100 shrink-0">
+                <button onclick="closeModal('modal-terms-of-service')" class="w-full bg-rota-pink text-white font-bold py-3 rounded-xl shadow-lg">I Understand</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/config.js"></script>
+    <script src="js/cache.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/toast.js"></script>
+    <script src="js/submission-helpers.js"></script>
+    <script src="js/completion-manager.js"></script>
+    <script src="js/auth.js"></script>
+    <script src="js/db.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/quiz.js"></script>
+    <script src="js/task.js"></script>
+    <script src="js/forms.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

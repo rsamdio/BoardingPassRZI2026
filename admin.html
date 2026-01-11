@@ -1,0 +1,1335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard | Boarding Pass - Rotaract Zone Institute 2026 Chennai</title>
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <link rel="apple-touch-icon" href="favicon.png" />
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-functions-compat.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        rota: {
+                            pink: '#D71947',
+                            dark: '#2d1b22',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .sidebar-transition { transition: transform 0.3s ease-in-out; }
+        
+        /* Dark mode styles */
+        .dark-mode {
+            background-color: #1e293b;
+            color: #f1f5f9;
+        }
+        
+        .dark-mode .bg-white {
+            background-color: #334155;
+        }
+        
+        .dark-mode .text-slate-800 {
+            color: #f1f5f9;
+        }
+        
+        .dark-mode .text-slate-600 {
+            color: #cbd5e1;
+        }
+        
+        .dark-mode .border-slate-200 {
+            border-color: #475569;
+        }
+        
+        /* Mobile menu */
+        @media (max-width: 768px) {
+            #sidebar {
+                transform: translateX(-100%);
+            }
+            
+            #sidebar.open {
+                transform: translateX(0);
+            }
+            
+            #mobile-menu-btn {
+                display: block;
+            }
+        }
+        
+        /* Command palette */
+        #command-palette .modal-content {
+            max-height: 80vh;
+        }
+        
+        kbd {
+            font-family: monospace;
+            font-size: 0.875rem;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans">
+    
+    <!-- LOGIN SCREEN -->
+    <div id="login-screen" class="fixed inset-0 bg-slate-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
+            <div class="text-center mb-8">
+                <div class="w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+                    <img src="rzilogo.webp" alt="Rotaract Zone Institute" class="w-full h-full object-contain">
+                </div>
+                <h2 class="font-bold text-2xl text-slate-800 mb-2">Admin Login</h2>
+                <p class="text-sm text-slate-500">Sign in to access the admin dashboard</p>
+            </div>
+            
+            <button onclick="AdminAuth.signInWithGoogle()" class="w-full bg-white border-2 border-slate-200 text-slate-700 font-medium py-3 px-4 rounded-lg hover:bg-slate-50 transition-colors flex items-center justify-center gap-3 mb-4">
+                <svg class="w-5 h-5" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                </svg>
+                Sign in with Google
+            </button>
+            
+            <p class="text-xs text-center text-slate-500 mt-4">
+                Only users with admin privileges can access this dashboard
+            </p>
+        </div>
+    </div>
+    
+    <!-- MAIN CONTENT -->
+    <div id="main-content" class="hidden">
+    
+    <!-- SIDEBAR -->
+    <aside id="sidebar" class="fixed left-0 top-0 h-full w-64 bg-white border-r border-slate-200 shadow-lg z-30 sidebar-transition">
+        <div class="p-6 border-b border-slate-200">
+            <div class="flex items-center gap-3">
+                <img src="rzilogo.webp" alt="Rotaract Zone Institute" class="w-10 h-10 object-contain">
+                <div>
+                    <h1 class="font-bold text-lg text-slate-800">Admin Panel</h1>
+                    <p class="text-xs text-slate-500">Boarding Pass</p>
+                </div>
+            </div>
+        </div>
+        
+        <nav class="p-4 space-y-2">
+            <button onclick="AdminUI.switchView('dashboard')" class="nav-item w-full text-left px-4 py-3 rounded-lg flex items-center gap-3 hover:bg-slate-100 transition-colors" data-view="dashboard">
+                <i class="fas fa-chart-line text-slate-400"></i>
+                <span class="font-medium">Dashboard</span>
+            </button>
+            <button onclick="AdminUI.switchView('attendees')" class="nav-item w-full text-left px-4 py-3 rounded-lg flex items-center gap-3 hover:bg-slate-100 transition-colors" data-view="attendees">
+                <i class="fas fa-users text-slate-400"></i>
+                <span class="font-medium">Attendees</span>
+            </button>
+            <button onclick="AdminUI.switchView('quizzes')" class="nav-item w-full text-left px-4 py-3 rounded-lg flex items-center gap-3 hover:bg-slate-100 transition-colors" data-view="quizzes">
+                <i class="fas fa-puzzle-piece text-slate-400"></i>
+                <span class="font-medium">Quizzes</span>
+            </button>
+            <button onclick="AdminUI.switchView('tasks')" class="nav-item w-full text-left px-4 py-3 rounded-lg flex items-center gap-3 hover:bg-slate-100 transition-colors" data-view="tasks">
+                <i class="fas fa-tasks text-slate-400"></i>
+                <span class="font-medium">Tasks</span>
+            </button>
+            <button onclick="AdminUI.switchView('forms')" class="nav-item w-full text-left px-4 py-3 rounded-lg flex items-center gap-3 hover:bg-slate-100 transition-colors" data-view="forms">
+                <i class="fas fa-file-alt text-slate-400"></i>
+                <span class="font-medium">Forms/Surveys</span>
+            </button>
+            <button onclick="AdminUI.switchView('submissions')" class="nav-item w-full text-left px-4 py-3 rounded-lg flex items-center gap-3 hover:bg-slate-100 transition-colors" data-view="submissions">
+                <i class="fas fa-file-upload text-slate-400"></i>
+                <span class="font-medium">Reviews</span>
+            </button>
+            <button onclick="AdminUI.switchView('leaderboard')" class="nav-item w-full text-left px-4 py-3 rounded-lg flex items-center gap-3 hover:bg-slate-100 transition-colors" data-view="leaderboard">
+                <i class="fas fa-trophy text-slate-400"></i>
+                <span class="font-medium">Leaderboard</span>
+            </button>
+        </nav>
+        
+        <div class="absolute bottom-0 left-0 right-0 p-4 border-t border-slate-200">
+            <button onclick="AdminAuth.logout()" class="w-full px-4 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-2 justify-center">
+                <i class="fas fa-sign-out-alt"></i>
+                <span class="font-medium">Logout</span>
+            </button>
+        </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="ml-64 p-8">
+        <!-- HEADER -->
+        <header class="mb-8 flex justify-between items-center">
+            <div>
+                <h2 id="page-title" class="text-3xl font-bold text-slate-800">Dashboard</h2>
+                <p id="page-subtitle" class="text-slate-500 mt-1">Overview and statistics</p>
+            </div>
+            <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2 bg-white px-4 py-2 rounded-lg border border-slate-200">
+                    <img id="admin-photo" src="" alt="Admin" class="w-8 h-8 rounded-full object-cover hidden" onerror="this.style.display='none'; document.getElementById('admin-icon').style.display='block';">
+                    <i id="admin-icon" class="fas fa-user-circle text-rota-pink"></i>
+                    <span id="admin-name" class="font-medium">Admin</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- VIEW: DASHBOARD -->
+        <div id="view-dashboard" class="view-content">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xl font-bold text-slate-800">Statistics</h2>
+                <button onclick="AdminDashboard.refreshStats()" class="px-4 py-2 text-sm font-medium text-rota-pink hover:text-rota-pink-dark transition-colors flex items-center gap-2">
+                    <i class="fas fa-sync-alt"></i>
+                    <span>Refresh</span>
+                </button>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                <div onclick="AdminDashboard.navigateToStat('attendees')" class="stat-card bg-white p-6 rounded-xl shadow-sm border border-slate-200 hover:shadow-md transition-all cursor-pointer" data-stat="total-users">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-slate-500 text-sm font-medium">Total Participants</span>
+                        <i class="fas fa-users text-slate-400"></i>
+                    </div>
+                    <div class="flex items-end gap-2 mb-1">
+                        <p id="stat-total-users" class="text-3xl font-bold text-slate-800">0</p>
+                    </div>
+                    <p id="stat-total-users-updated" class="text-xs text-slate-400"></p>
+                </div>
+                <div onclick="AdminDashboard.navigateToStat('attendees')" class="stat-card bg-white p-6 rounded-xl shadow-sm border border-slate-200 hover:shadow-md transition-all cursor-pointer" data-stat="active-users">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-slate-500 text-sm font-medium">Active Participants</span>
+                        <i class="fas fa-user-check text-green-500"></i>
+                    </div>
+                    <div class="flex items-end gap-2 mb-1">
+                        <p id="stat-active-users" class="text-3xl font-bold text-slate-800">0</p>
+                    </div>
+                    <p id="stat-active-users-updated" class="text-xs text-slate-400"></p>
+                </div>
+                <div onclick="AdminDashboard.navigateToStat('reviews')" class="stat-card bg-white p-6 rounded-xl shadow-sm border border-slate-200 hover:shadow-md transition-all cursor-pointer" data-stat="pending">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-slate-500 text-sm font-medium">Pending Submissions</span>
+                        <i class="fas fa-clock text-amber-500"></i>
+                    </div>
+                    <div class="flex items-end gap-2 mb-1">
+                        <p id="stat-pending" class="text-3xl font-bold text-slate-800">0</p>
+                    </div>
+                    <p id="stat-pending-updated" class="text-xs text-slate-400"></p>
+                </div>
+                <div onclick="AdminDashboard.navigateToStat('leaderboard')" class="stat-card bg-white p-6 rounded-xl shadow-sm border border-slate-200 hover:shadow-md transition-all cursor-pointer" data-stat="total-points">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-slate-500 text-sm font-medium">Total Points Awarded</span>
+                        <i class="fas fa-star text-amber-500"></i>
+                    </div>
+                    <div class="flex items-end gap-2 mb-1">
+                        <p id="stat-total-points" class="text-3xl font-bold text-slate-800">0</p>
+                    </div>
+                    <p id="stat-total-points-updated" class="text-xs text-slate-400"></p>
+                </div>
+            </div>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                    <h3 class="font-bold text-lg text-slate-800 mb-4">Recent Activity</h3>
+                    <div id="recent-activity" class="space-y-3">
+                        <!-- Activity items -->
+                    </div>
+                </div>
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                    <h3 class="font-bold text-lg text-slate-800 mb-4">Quick Actions</h3>
+                    <div class="space-y-3">
+                        <button onclick="AdminUI.switchView('quizzes'); AdminQuizzes.showCreateModal()" class="w-full text-left px-4 py-3 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors flex items-center gap-3">
+                            <i class="fas fa-plus text-rota-pink"></i>
+                            <span>Create New Quiz</span>
+                        </button>
+                        <button onclick="AdminUI.switchView('tasks'); AdminTasks.showCreateModal()" class="w-full text-left px-4 py-3 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors flex items-center gap-3">
+                            <i class="fas fa-plus text-rota-pink"></i>
+                            <span>Create New Task</span>
+                        </button>
+                        <button onclick="AdminUI.switchView('attendees')" class="w-full text-left px-4 py-3 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors flex items-center gap-3">
+                            <i class="fas fa-user-plus text-rota-pink"></i>
+                            <span>Add Attendee</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW: ATTENDEES -->
+        <div id="view-attendees" class="view-content hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="font-bold text-xl text-slate-800">Attendees Management</h3>
+                    <div class="flex gap-2">
+                        <button onclick="AdminAttendees.exportAttendees()" class="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2">
+                            <i class="fas fa-download"></i> Export CSV
+                        </button>
+                        <button onclick="AdminAttendees.showBulkUploadModal()" class="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-colors flex items-center gap-2">
+                            <i class="fas fa-file-csv"></i> Bulk Upload CSV
+                        </button>
+                        <button onclick="AdminAttendees.showAddModal()" class="bg-rota-pink text-white px-4 py-2 rounded-lg hover:bg-rose-700 transition-colors flex items-center gap-2">
+                            <i class="fas fa-plus"></i> Add Attendee
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="mb-4 space-y-3">
+                    <div class="flex gap-4 flex-wrap">
+                        <input type="text" id="attendee-search" oninput="AdminAttendees.filterAttendees()" placeholder="Search by name, email, phone, district..." class="flex-1 min-w-[200px] px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                        <select id="attendee-filter-status" onchange="AdminAttendees.filterAttendees()" class="px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                            <option value="all">All Status</option>
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                            <option value="pending">Pending</option>
+                        </select>
+                        <select id="attendee-filter-district" onchange="AdminAttendees.filterAttendees()" class="px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                            <option value="all">All Districts</option>
+                        </select>
+                        <select id="attendee-filter-designation" onchange="AdminAttendees.filterAttendees()" class="px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                            <option value="all">All Designations</option>
+                        </select>
+                    </div>
+                    <div class="flex gap-4 items-center">
+                        <select id="attendee-sort-by" onchange="AdminAttendees.filterAttendees()" class="px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                            <option value="name">Sort by Name</option>
+                            <option value="email">Sort by Email</option>
+                            <option value="points">Sort by Points</option>
+                            <option value="district">Sort by District</option>
+                        </select>
+                        <select id="attendee-sort-order" onchange="AdminAttendees.filterAttendees()" class="px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                            <option value="asc">Ascending</option>
+                            <option value="desc">Descending</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div id="bulk-actions" class="mb-4 hidden"></div>
+                
+                <div class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead class="bg-slate-50 border-b border-slate-200 sticky top-0">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase">
+                                    <input type="checkbox" onchange="AdminAttendees.toggleSelectAll()" class="w-4 h-4 text-rota-pink border-slate-300 rounded focus:ring-rota-pink">
+                                </th>
+                                <th class="px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase cursor-pointer hover:bg-slate-100" onclick="AdminAttendees.sortBy('name')">Name</th>
+                                <th class="px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase cursor-pointer hover:bg-slate-100" onclick="AdminAttendees.sortBy('email')">Email</th>
+                                <th class="px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase">Phone</th>
+                                <th class="px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase cursor-pointer hover:bg-slate-100" onclick="AdminAttendees.sortBy('district')">District</th>
+                                <th class="px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase">Designation</th>
+                                <th class="px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase cursor-pointer hover:bg-slate-100" onclick="AdminAttendees.sortBy('points')">Points</th>
+                                <th class="px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase">Status</th>
+                                <th class="px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="attendees-table" class="divide-y divide-slate-100">
+                            <!-- Attendees rendered here -->
+                        </tbody>
+                    </table>
+                </div>
+                <div id="attendees-pagination" class="mt-4"></div>
+            </div>
+        </div>
+
+        <!-- VIEW: QUIZZES -->
+        <div id="view-quizzes" class="view-content hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="font-bold text-xl text-slate-800">Quiz Management</h3>
+                    <button onclick="AdminQuizzes.showCreateModal()" class="bg-rota-pink text-white px-4 py-2 rounded-lg hover:bg-rose-700 transition-colors flex items-center gap-2">
+                        <i class="fas fa-plus"></i> Create Quiz
+                    </button>
+                </div>
+                
+                <div id="quizzes-list" class="space-y-4">
+                    <!-- Quizzes rendered here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW: QUIZ SUBMISSIONS (Step-by-step flow) -->
+        <div id="view-quiz-submissions" class="view-content hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-full flex flex-col">
+                <!-- Header with back button -->
+                <div class="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
+                    <button onclick="AdminQuizzes.backToQuizzes()" class="w-10 h-10 flex items-center justify-center bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors">
+                        <i class="fas fa-arrow-left"></i>
+                    </button>
+                    <div class="flex-1">
+                        <h3 id="quiz-submissions-view-title" class="font-bold text-xl text-slate-800">Quiz Submissions</h3>
+                        <p id="quiz-submissions-view-count" class="text-sm text-slate-500">0 submissions</p>
+                    </div>
+                    <button id="quiz-submissions-view-download" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2">
+                        <i class="fas fa-download"></i> Download CSV
+                    </button>
+                </div>
+
+                <!-- Step Indicator -->
+                <div class="mb-6">
+                    <div class="flex items-center justify-center gap-2">
+                        <span class="text-sm font-medium text-slate-600">Submission</span>
+                        <span id="quiz-submissions-current" class="text-lg font-bold text-rota-pink">1</span>
+                        <span class="text-sm font-medium text-slate-600">of</span>
+                        <span id="quiz-submissions-total" class="text-lg font-bold text-slate-800">0</span>
+                    </div>
+                    <div class="mt-2 w-full bg-slate-200 rounded-full h-2">
+                        <div id="quiz-submissions-progress" class="bg-rota-pink h-2 rounded-full transition-all" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <!-- Submission Content (Scrollable) -->
+                <div id="quiz-submissions-content" class="flex-1 overflow-y-auto pr-2">
+                    <!-- Submission rendered here -->
+                </div>
+
+                <!-- Navigation Buttons -->
+                <div class="mt-6 pt-4 border-t border-slate-200 flex justify-between gap-3">
+                    <button onclick="AdminQuizzes.backToQuizzes()" class="px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                        Back to Quizzes
+                    </button>
+                    <div class="flex gap-3">
+                        <button id="quiz-submissions-prev" onclick="AdminQuizzes.previousSubmission()" class="px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                            <i class="fas fa-arrow-left"></i> Previous
+                        </button>
+                        <button id="quiz-submissions-next" onclick="AdminQuizzes.nextSubmission()" class="px-6 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors">
+                            Next <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW: QUIZ CREATOR (Step-by-step flow) -->
+        <div id="view-quiz-creator" class="view-content hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-full flex flex-col">
+                <!-- Header with back button -->
+                <div class="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
+                    <button onclick="AdminQuizzes.cancelQuiz()" class="w-10 h-10 flex items-center justify-center bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors">
+                        <i class="fas fa-arrow-left"></i>
+                    </button>
+                    <div class="flex-1">
+                        <h3 id="quiz-creator-title" class="font-bold text-xl text-slate-800">Create Quiz</h3>
+                        <p class="text-sm text-slate-500">Step-by-step quiz creation</p>
+                    </div>
+                </div>
+
+                <!-- Step Indicator -->
+                <div class="mb-6">
+                    <div class="flex items-center justify-center gap-4">
+                        <div class="flex items-center gap-2">
+                            <div id="step-1-indicator" class="w-10 h-10 rounded-full bg-rota-pink text-white flex items-center justify-center font-bold">1</div>
+                            <span class="text-sm font-medium text-slate-700">Basic Info</span>
+                        </div>
+                        <div class="w-16 h-1 bg-slate-200"></div>
+                        <div class="flex items-center gap-2">
+                            <div id="step-2-indicator" class="w-10 h-10 rounded-full bg-slate-200 text-slate-500 flex items-center justify-center font-bold">2</div>
+                            <span class="text-sm font-medium text-slate-500">Questions</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Form Container (Scrollable) -->
+                <form id="quiz-form" onsubmit="AdminQuizzes.saveQuiz(event)" class="flex-1 flex flex-col overflow-hidden">
+                    <input type="hidden" id="quiz-id">
+                    
+                    <!-- Step 1: Basic Info -->
+                    <div id="quiz-step-1" class="flex-1 overflow-y-auto pr-2">
+                        <div class="space-y-4 max-w-2xl mx-auto">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-2">Title *</label>
+                                <input type="text" id="quiz-title" required class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-2">Description</label>
+                                <textarea id="quiz-description" rows="3" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none"></textarea>
+                            </div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-2">Total Points (Auto-calculated)</label>
+                                    <div id="quiz-total-points" class="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold">
+                                        0
+                                    </div>
+                                    <p class="text-xs text-slate-500 mt-1">Sum of all question points</p>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-2">Status</label>
+                                    <select id="quiz-status" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                                        <option value="active">Active</option>
+                                        <option value="draft">Draft</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 2: Questions -->
+                    <div id="quiz-step-2" class="hidden flex-1 flex flex-col overflow-hidden">
+                        <div class="flex-1 overflow-y-auto pr-2">
+                            <div class="max-w-4xl mx-auto space-y-4">
+                                <div class="flex justify-between items-center mb-4">
+                                    <h4 class="font-bold text-slate-800">Questions</h4>
+                                </div>
+                                <div id="quiz-questions" class="space-y-4">
+                                    <!-- Questions rendered here -->
+                                </div>
+                                <!-- Add Question Button at Bottom -->
+                                <div class="mt-4 pt-4 border-t border-slate-200">
+                                    <button type="button" onclick="AdminQuizzes.addQuestion()" class="w-full bg-slate-100 text-slate-700 px-4 py-3 rounded-lg hover:bg-slate-200 transition-colors flex items-center justify-center gap-2 font-medium">
+                                        <i class="fas fa-plus"></i> Add Question
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Navigation Buttons -->
+                    <div class="mt-6 pt-4 border-t border-slate-200 flex justify-between gap-3">
+                        <button type="button" onclick="AdminQuizzes.cancelQuiz()" class="px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                            Cancel
+                        </button>
+                        <div class="flex gap-3">
+                            <button type="button" id="quiz-prev-btn" onclick="AdminQuizzes.previousStep()" class="hidden px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                                <i class="fas fa-arrow-left"></i> Previous
+                            </button>
+                            <button type="button" id="quiz-next-btn" onclick="AdminQuizzes.nextStep()" class="px-6 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors">
+                                Next <i class="fas fa-arrow-right"></i>
+                            </button>
+                            <button type="submit" id="quiz-save-btn" class="hidden px-6 py-2 bg-rota-pink text-white rounded-lg hover:bg-rose-700 transition-colors">
+                                Save Quiz
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- VIEW: TASKS -->
+        <div id="view-tasks" class="view-content hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="font-bold text-xl text-slate-800">Task Management</h3>
+                    <button onclick="AdminTasks.showCreateModal()" class="bg-rota-pink text-white px-4 py-2 rounded-lg hover:bg-rose-700 transition-colors flex items-center gap-2">
+                        <i class="fas fa-plus"></i> Create Task
+                    </button>
+                </div>
+                
+                <div id="tasks-list" class="space-y-4">
+                    <!-- Tasks rendered here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW: TASK CREATOR (Step-by-step flow) -->
+        <div id="view-task-creator" class="view-content hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-full flex flex-col">
+                <!-- Header with back button -->
+                <div class="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
+                    <button onclick="AdminTasks.cancelTask()" class="w-10 h-10 flex items-center justify-center bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors">
+                        <i class="fas fa-arrow-left"></i>
+                    </button>
+                    <div class="flex-1">
+                        <h3 id="task-creator-title" class="font-bold text-xl text-slate-800">Create Task</h3>
+                        <p class="text-sm text-slate-500">Step-by-step task creation</p>
+                    </div>
+                </div>
+
+                <!-- Step Indicator -->
+                <div class="mb-6">
+                    <div class="flex items-center justify-center gap-4">
+                        <div class="flex items-center gap-2">
+                            <div id="task-step-1-indicator" class="w-10 h-10 rounded-full bg-rota-pink text-white flex items-center justify-center font-bold">1</div>
+                            <span class="text-sm font-medium text-slate-700">Basic Info</span>
+                        </div>
+                        <div id="task-step-connector" class="w-16 h-1 bg-slate-200"></div>
+                        <div id="task-step-2-container" class="flex items-center gap-2">
+                            <div id="task-step-2-indicator" class="w-10 h-10 rounded-full bg-slate-200 text-slate-500 flex items-center justify-center font-bold">2</div>
+                            <span class="text-sm font-medium text-slate-500">Form Fields</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Form Container (Scrollable) -->
+                <form id="task-form" onsubmit="AdminTasks.saveTask(event)" class="flex-1 flex flex-col overflow-hidden">
+                    <input type="hidden" id="task-id">
+                    
+                    <!-- Step 1: Basic Info -->
+                    <div id="task-step-1" class="flex-1 overflow-y-auto pr-2">
+                        <div class="space-y-4 max-w-2xl mx-auto">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-2">Title *</label>
+                                <input type="text" id="task-title" required class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-2">Description *</label>
+                                <textarea id="task-description" rows="3" required class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none"></textarea>
+                            </div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-2">Type *</label>
+                                    <select id="task-type" onchange="AdminTasks.handleTypeChange()" required class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                                        <option value="upload">File Upload</option>
+                                        <option value="form">Form</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-2">Points *</label>
+                                    <input type="number" id="task-points" required min="1" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-2">Status</label>
+                                <select id="task-status" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                                    <option value="active">Active</option>
+                                    <option value="inactive">Inactive</option>
+                                </select>
+                            </div>
+                            
+                            <!-- Upload-specific fields -->
+                            <div id="task-upload-fields" class="space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-2">Max File Size (MB)</label>
+                                    <input type="number" id="task-max-size" value="5" min="1" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 2: Form Fields -->
+                    <div id="task-step-2" class="hidden flex-1 flex flex-col overflow-hidden">
+                        <div class="flex-1 overflow-y-auto pr-2">
+                            <div class="max-w-4xl mx-auto space-y-4">
+                                <div class="flex justify-between items-center mb-4">
+                                    <h4 class="font-bold text-slate-800">Form Fields</h4>
+                                    <button type="button" onclick="AdminTasks.addFormField()" class="text-sm bg-slate-100 text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-2">
+                                        <i class="fas fa-plus"></i> Add Field
+                                    </button>
+                                </div>
+                                <div id="task-form-fields-list" class="space-y-4">
+                                    <!-- Form fields rendered here -->
+                                </div>
+                                <!-- Add Field Button at Bottom -->
+                                <div class="mt-4 pt-4 border-t border-slate-200">
+                                    <button type="button" onclick="AdminTasks.addFormField()" class="w-full bg-slate-100 text-slate-700 px-4 py-3 rounded-lg hover:bg-slate-200 transition-colors flex items-center justify-center gap-2 font-medium">
+                                        <i class="fas fa-plus"></i> Add Field
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Navigation Buttons -->
+                    <div class="mt-6 pt-4 border-t border-slate-200 flex justify-between gap-3">
+                        <button type="button" onclick="AdminTasks.cancelTask()" class="px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                            Cancel
+                        </button>
+                        <div class="flex gap-3">
+                            <button type="button" id="task-prev-btn" onclick="AdminTasks.previousTaskStep()" class="hidden px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                                <i class="fas fa-arrow-left"></i> Previous
+                            </button>
+                            <button type="button" id="task-next-btn" onclick="AdminTasks.nextTaskStep()" class="px-6 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors">
+                                Next <i class="fas fa-arrow-right"></i>
+                            </button>
+                            <button type="submit" id="task-save-btn" class="hidden px-6 py-2 bg-rota-pink text-white rounded-lg hover:bg-rose-700 transition-colors">
+                                Save Task
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- VIEW: TASK SUBMISSIONS (Step-by-step flow) -->
+        <div id="view-task-submissions" class="view-content hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-full flex flex-col">
+                <!-- Header with back button -->
+                <div class="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
+                    <button onclick="AdminTasks.backToTasks()" class="w-10 h-10 flex items-center justify-center bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors">
+                        <i class="fas fa-arrow-left"></i>
+                    </button>
+                    <div class="flex-1">
+                        <h3 id="task-submissions-view-title" class="font-bold text-xl text-slate-800">Task Submissions</h3>
+                        <p id="task-submissions-view-count" class="text-sm text-slate-500">0 submissions</p>
+                    </div>
+                    <button id="task-submissions-view-download" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2">
+                        <i class="fas fa-download"></i> Download CSV
+                    </button>
+                </div>
+
+                <!-- Step Indicator -->
+                <div class="mb-6">
+                    <div class="flex items-center justify-center gap-2">
+                        <span class="text-sm font-medium text-slate-600">Submission</span>
+                        <span id="task-submissions-current" class="text-lg font-bold text-rota-pink">1</span>
+                        <span class="text-sm font-medium text-slate-600">of</span>
+                        <span id="task-submissions-total" class="text-lg font-bold text-slate-800">0</span>
+                    </div>
+                    <div class="mt-2 w-full bg-slate-200 rounded-full h-2">
+                        <div id="task-submissions-progress" class="bg-rota-pink h-2 rounded-full transition-all" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <!-- Submission Content (Scrollable) -->
+                <div id="task-submissions-content" class="flex-1 overflow-y-auto pr-2">
+                    <!-- Submission rendered here -->
+                </div>
+
+                <!-- Navigation Buttons -->
+                <div class="mt-6 pt-4 border-t border-slate-200 flex justify-between gap-3">
+                    <button onclick="AdminTasks.backToTasks()" class="px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                        Back to Tasks
+                    </button>
+                    <div class="flex gap-3">
+                        <button id="task-submissions-prev" onclick="AdminTasks.previousTaskSubmission()" class="px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                            <i class="fas fa-arrow-left"></i> Previous
+                        </button>
+                        <button id="task-submissions-next" onclick="AdminTasks.nextTaskSubmission()" class="px-6 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors">
+                            Next <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW: FORMS/SURVEYS -->
+        <div id="view-forms" class="view-content hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="font-bold text-xl text-slate-800">Forms & Surveys Management</h3>
+                    <button onclick="AdminForms.showCreateModal()" class="bg-rota-pink text-white px-4 py-2 rounded-lg hover:bg-rose-700 transition-colors flex items-center gap-2">
+                        <i class="fas fa-plus"></i> Create Form
+                    </button>
+                </div>
+                
+                <div id="forms-list" class="space-y-4">
+                    <!-- Forms rendered here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW: FORM CREATOR (Step-by-step flow) -->
+        <div id="view-form-creator" class="view-content hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-full flex flex-col">
+                <!-- Header with back button -->
+                <div class="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
+                    <button onclick="AdminForms.cancelForm()" class="w-10 h-10 flex items-center justify-center bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors">
+                        <i class="fas fa-arrow-left"></i>
+                    </button>
+                    <div class="flex-1">
+                        <h3 id="form-creator-title" class="font-bold text-xl text-slate-800">Create Form/Survey</h3>
+                        <p class="text-sm text-slate-500">Step-by-step form creation</p>
+                    </div>
+                </div>
+
+                <!-- Step Indicator -->
+                <div class="mb-6">
+                    <div class="flex items-center justify-center gap-4">
+                        <div class="flex items-center gap-2">
+                            <div id="form-step-1-indicator" class="w-10 h-10 rounded-full bg-rota-pink text-white flex items-center justify-center font-bold">1</div>
+                            <span class="text-sm font-medium text-slate-700">Basic Info</span>
+                        </div>
+                        <div id="form-step-connector" class="w-16 h-1 bg-slate-200"></div>
+                        <div id="form-step-2-container" class="flex items-center gap-2">
+                            <div id="form-step-2-indicator" class="w-10 h-10 rounded-full bg-slate-200 text-slate-500 flex items-center justify-center font-bold">2</div>
+                            <span class="text-sm font-medium text-slate-500">Form Fields</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Form Container (Scrollable) -->
+                <form id="form-form" onsubmit="AdminForms.saveForm(event)" class="flex-1 flex flex-col overflow-hidden">
+                    <input type="hidden" id="form-id">
+                    
+                    <!-- Step 1: Basic Info -->
+                    <div id="form-step-1" class="flex-1 overflow-y-auto pr-2">
+                        <div class="space-y-4 max-w-2xl mx-auto">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-2">Title *</label>
+                                <input type="text" id="form-title" required class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-2">Description</label>
+                                <textarea id="form-description" rows="3" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none"></textarea>
+                            </div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-2">Points</label>
+                                    <input type="number" id="form-points" min="0" value="0" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-2">Status</label>
+                                    <select id="form-status" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                                        <option value="active">Active</option>
+                                        <option value="inactive">Inactive</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 2: Form Fields -->
+                    <div id="form-step-2" class="hidden flex-1 flex flex-col overflow-hidden">
+                        <div class="flex-1 overflow-y-auto pr-2">
+                            <div class="max-w-4xl mx-auto space-y-4">
+                                <div class="flex justify-between items-center mb-4">
+                                    <h4 class="font-bold text-slate-800">Form Fields</h4>
+                                    <button type="button" onclick="AdminForms.addFormField()" class="text-sm bg-slate-100 text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-2">
+                                        <i class="fas fa-plus"></i> Add Field
+                                    </button>
+                                </div>
+                                <div id="form-fields-list" class="space-y-4">
+                                    <!-- Form fields rendered here -->
+                                </div>
+                                <!-- Add Field Button at Bottom -->
+                                <div class="mt-4 pt-4 border-t border-slate-200">
+                                    <button type="button" onclick="AdminForms.addFormField()" class="w-full bg-slate-100 text-slate-700 px-4 py-3 rounded-lg hover:bg-slate-200 transition-colors flex items-center justify-center gap-2 font-medium">
+                                        <i class="fas fa-plus"></i> Add Field
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Navigation Buttons -->
+                    <div class="mt-6 pt-4 border-t border-slate-200 flex justify-between gap-3">
+                        <button type="button" onclick="AdminForms.cancelForm()" class="px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                            Cancel
+                        </button>
+                        <div class="flex gap-3">
+                            <button type="button" id="form-prev-btn" onclick="AdminForms.previousFormStep()" class="hidden px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                                <i class="fas fa-arrow-left"></i> Previous
+                            </button>
+                            <button type="button" id="form-next-btn" onclick="AdminForms.nextFormStep()" class="px-6 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors">
+                                Next <i class="fas fa-arrow-right"></i>
+                            </button>
+                            <button type="submit" id="form-save-btn" class="hidden px-6 py-2 bg-rota-pink text-white rounded-lg hover:bg-rose-700 transition-colors">
+                                Save Form
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- VIEW: FORM SUBMISSIONS (Step-by-step flow) -->
+        <div id="view-form-submissions" class="view-content hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-full flex flex-col">
+                <!-- Header with back button -->
+                <div class="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
+                    <button onclick="AdminForms.backToForms()" class="w-10 h-10 flex items-center justify-center bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors">
+                        <i class="fas fa-arrow-left"></i>
+                    </button>
+                    <div class="flex-1">
+                        <h3 id="form-submissions-view-title" class="font-bold text-xl text-slate-800">Form Responses</h3>
+                        <p id="form-submissions-view-count" class="text-sm text-slate-500">0 responses</p>
+                    </div>
+                    <button id="form-submissions-view-download" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2">
+                        <i class="fas fa-download"></i> Download CSV
+                    </button>
+                </div>
+
+                <!-- Step Indicator -->
+                <div class="mb-6">
+                    <div class="flex items-center justify-center gap-2">
+                        <span class="text-sm font-medium text-slate-600">Response</span>
+                        <span id="form-submissions-current" class="text-lg font-bold text-rota-pink">1</span>
+                        <span class="text-sm font-medium text-slate-600">of</span>
+                        <span id="form-submissions-total" class="text-lg font-bold text-slate-800">0</span>
+                    </div>
+                    <div class="mt-2 w-full bg-slate-200 rounded-full h-2">
+                        <div id="form-submissions-progress" class="bg-rota-pink h-2 rounded-full transition-all" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <!-- Submission Content (Scrollable) -->
+                <div id="form-submissions-content" class="flex-1 overflow-y-auto pr-2">
+                    <!-- Submission rendered here -->
+                </div>
+
+                <!-- Navigation Buttons -->
+                <div class="mt-6 pt-4 border-t border-slate-200 flex justify-between gap-3">
+                    <button onclick="AdminForms.backToForms()" class="px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                        Back to Forms
+                    </button>
+                    <div class="flex gap-3">
+                        <button id="form-submissions-prev" onclick="AdminForms.previousFormSubmission()" class="px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                            <i class="fas fa-arrow-left"></i> Previous
+                        </button>
+                        <button id="form-submissions-next" onclick="AdminForms.nextFormSubmission()" class="px-6 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors">
+                            Next <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW: FORM DETAIL (Step-by-step flow) -->
+        <div id="view-form-detail" class="view-content hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-full flex flex-col">
+                <!-- Header with back button -->
+                <div class="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
+                    <button onclick="AdminForms.backToForms()" class="w-10 h-10 flex items-center justify-center bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors">
+                        <i class="fas fa-arrow-left"></i>
+                    </button>
+                    <div class="flex-1">
+                        <h3 id="form-detail-title" class="font-bold text-xl text-slate-800">Form Details</h3>
+                        <p id="form-detail-type" class="text-sm text-slate-500">Form Information</p>
+                    </div>
+                </div>
+
+                <!-- Step Indicator -->
+                <div class="mb-6">
+                    <div class="flex items-center justify-center gap-2">
+                        <span class="text-sm font-medium text-slate-600">Form</span>
+                        <span id="form-detail-current" class="text-lg font-bold text-rota-pink">1</span>
+                        <span class="text-sm font-medium text-slate-600">of</span>
+                        <span id="form-detail-total" class="text-lg font-bold text-slate-800">0</span>
+                    </div>
+                    <div class="mt-2 w-full bg-slate-200 rounded-full h-2">
+                        <div id="form-detail-progress" class="bg-rota-pink h-2 rounded-full transition-all" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <!-- Form Content (Scrollable) -->
+                <div id="form-detail-content" class="flex-1 overflow-y-auto pr-2">
+                    <!-- Form rendered here -->
+                </div>
+
+                <!-- Navigation Buttons -->
+                <div class="mt-6 pt-4 border-t border-slate-200 flex justify-between gap-3">
+                    <button onclick="AdminForms.backToForms()" class="px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                        Back to List
+                    </button>
+                    <div class="flex gap-3">
+                        <button id="form-detail-prev" onclick="AdminForms.previousForm()" class="px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                            <i class="fas fa-arrow-left"></i> Previous
+                        </button>
+                        <button id="form-detail-next" onclick="AdminForms.nextForm()" class="px-6 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors">
+                            Next <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW: SUBMISSIONS -->
+        <div id="view-submissions" class="view-content hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="font-bold text-xl text-slate-800">Task Reviews</h3>
+                </div>
+                
+                <!-- Tabs -->
+                <div class="mb-6 border-b border-slate-200">
+                    <div class="flex gap-4">
+                        <button id="tab-pending" onclick="AdminSubmissions.switchTab('pending')" class="px-4 py-2 font-medium text-sm border-b-2 border-rota-pink text-rota-pink transition-colors">
+                            Pending Reviews
+                        </button>
+                        <button id="tab-all" onclick="AdminSubmissions.switchTab('all')" class="px-4 py-2 font-medium text-sm text-slate-500 hover:text-slate-700 border-b-2 border-transparent transition-colors">
+                            All Reviews
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Status Filter (only shown for "All Reviews" tab) -->
+                <div id="status-filter-container" class="mb-4 hidden">
+                    <select id="submission-filter" onchange="AdminSubmissions.filterSubmissions()" class="px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                        <option value="all">All Status</option>
+                        <option value="pending">Pending</option>
+                        <option value="approved">Approved</option>
+                        <option value="rejected">Rejected</option>
+                    </select>
+                </div>
+                
+                <div id="submissions-list" class="space-y-4">
+                    <!-- Submissions rendered here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW: SUBMISSION DETAIL (Step-by-step flow) -->
+        <div id="view-submission-detail" class="view-content hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-full flex flex-col">
+                <!-- Header with back button -->
+                <div class="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
+                    <button onclick="AdminSubmissions.backToSubmissions()" class="w-10 h-10 flex items-center justify-center bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors">
+                        <i class="fas fa-arrow-left"></i>
+                    </button>
+                    <div class="flex-1">
+                        <h3 id="submission-detail-title" class="font-bold text-xl text-slate-800">Submission Details</h3>
+                        <p id="submission-detail-type" class="text-sm text-slate-500">Task Submission</p>
+                    </div>
+                    <button id="submission-detail-download" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2">
+                        <i class="fas fa-download"></i> Download
+                    </button>
+                </div>
+
+                <!-- Step Indicator -->
+                <div class="mb-6">
+                    <div class="flex items-center justify-center gap-2">
+                        <span class="text-sm font-medium text-slate-600">Submission</span>
+                        <span id="submission-detail-current" class="text-lg font-bold text-rota-pink">1</span>
+                        <span class="text-sm font-medium text-slate-600">of</span>
+                        <span id="submission-detail-total" class="text-lg font-bold text-slate-800">0</span>
+                    </div>
+                    <div class="mt-2 w-full bg-slate-200 rounded-full h-2">
+                        <div id="submission-detail-progress" class="bg-rota-pink h-2 rounded-full transition-all" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <!-- Submission Content (Scrollable) -->
+                <div id="submission-detail-content" class="flex-1 overflow-y-auto pr-2">
+                    <!-- Submission rendered here -->
+                </div>
+
+                <!-- Navigation Buttons -->
+                <div class="mt-6 pt-4 border-t border-slate-200 flex justify-between gap-3">
+                    <button onclick="AdminSubmissions.backToSubmissions()" class="px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                        Back to List
+                    </button>
+                    <div class="flex gap-3">
+                        <button id="submission-detail-prev" onclick="AdminSubmissions.previousSubmission()" class="px-6 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                            <i class="fas fa-arrow-left"></i> Previous
+                        </button>
+                        <button id="submission-detail-next" onclick="AdminSubmissions.nextSubmission()" class="px-6 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors">
+                            Next <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW: LEADERBOARD -->
+        <div id="view-leaderboard" class="view-content hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="font-bold text-xl text-slate-800">Leaderboard</h3>
+                    <button onclick="AdminLeaderboard.exportData()" class="bg-slate-100 text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-2">
+                        <i class="fas fa-download"></i> Export CSV
+                    </button>
+                </div>
+                
+                <div class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead class="bg-slate-50 border-b border-slate-200">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase">Rank</th>
+                                <th class="px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase">Name</th>
+                                <th class="px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase">District</th>
+                                <th class="px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase">Designation</th>
+                                <th class="px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase">Points</th>
+                                <th class="px-4 py-3 text-left text-xs font-bold text-slate-600 uppercase">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="leaderboard-table" class="divide-y divide-slate-100">
+                            <!-- Leaderboard rendered here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- MODALS -->
+    <!-- Add/Edit Attendee Modal -->
+    <div id="modal-attendee" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl w-full max-w-md p-6 relative shadow-2xl">
+            <button onclick="AdminUI.closeModal('modal-attendee')" class="absolute top-4 right-4 w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200"><i class="fas fa-times"></i></button>
+            <h3 id="attendee-modal-title" class="font-bold text-xl text-slate-800 mb-6">Add Attendee</h3>
+            <form id="attendee-form" onsubmit="AdminAttendees.saveAttendee(event)" class="space-y-4">
+                <input type="hidden" id="attendee-uid">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Name *</label>
+                    <input type="text" id="attendee-name" required class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Email *</label>
+                    <input type="email" id="attendee-email" required class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                    <p class="text-xs text-slate-500 mt-1" id="email-help-text">Email will be used for Google login</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Phone</label>
+                    <input type="tel" id="attendee-phone" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none" placeholder="+1234567890">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">District *</label>
+                    <input type="text" id="attendee-district" required class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Designation *</label>
+                    <input type="text" id="attendee-designation" required class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Status</label>
+                    <select id="attendee-status" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none" disabled>
+                        <option value="pending">Pending (Auto: No login yet)</option>
+                        <option value="active">Active (Auto: Has logged in)</option>
+                        <option value="inactive">Inactive</option>
+                    </select>
+                    <p class="text-xs text-slate-500 mt-1">Status is automatically set based on login. Use toggle button to activate/deactivate.</p>
+                </div>
+                <div class="flex gap-3 pt-4">
+                    <button type="button" onclick="AdminUI.closeModal('modal-attendee')" class="flex-1 px-4 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-2 bg-rota-pink text-white rounded-lg hover:bg-rose-700 transition-colors">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Bulk Upload CSV Modal -->
+    <div id="modal-bulk-upload" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl w-full max-w-2xl p-6 relative shadow-2xl">
+            <button onclick="AdminUI.closeModal('modal-bulk-upload')" class="absolute top-4 right-4 w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200"><i class="fas fa-times"></i></button>
+            <h3 class="font-bold text-xl text-slate-800 mb-6">Bulk Upload Attendees (CSV)</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Upload CSV File *</label>
+                    <div class="flex gap-2 mb-2">
+                        <input type="file" id="csv-file" accept=".csv" class="flex-1 px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                        <button type="button" onclick="AdminAttendees.downloadCSVTemplate()" class="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-2">
+                            <i class="fas fa-download"></i> Template
+                        </button>
+                    </div>
+                    <p class="text-xs text-slate-500">
+                        CSV format: Name, Email, Phone, District, Designation<br>
+                        Header row is optional. Phone is optional.
+                    </p>
+                </div>
+                <div class="bg-slate-50 rounded-lg p-4">
+                    <h4 class="font-bold text-sm text-slate-700 mb-2">Example CSV:</h4>
+                    <pre class="text-xs text-slate-600 font-mono">Name,Email,Phone,District,Designation
+John Doe,john@example.com,+1234567890,District 1,President
+Jane Smith,jane@example.com,,District 2,Secretary</pre>
+                </div>
+                <div class="flex gap-3 pt-4">
+                    <button type="button" onclick="AdminUI.closeModal('modal-bulk-upload')" class="flex-1 px-4 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">Cancel</button>
+                    <button onclick="AdminAttendees.processBulkUpload()" class="flex-1 px-4 py-2 bg-rota-pink text-white rounded-lg hover:bg-rose-700 transition-colors">
+                        <i class="fas fa-upload"></i> Upload & Process
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create/Edit Quiz Modal -->
+    <div id="modal-quiz" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+        <div class="bg-white rounded-2xl w-full max-w-2xl p-6 relative shadow-2xl my-8">
+            <button onclick="AdminUI.closeModal('modal-quiz')" class="absolute top-4 right-4 w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200"><i class="fas fa-times"></i></button>
+            <h3 id="quiz-modal-title" class="font-bold text-xl text-slate-800 mb-6">Create Quiz</h3>
+            <form id="quiz-form" onsubmit="AdminQuizzes.saveQuiz(event)" class="space-y-4">
+                <input type="hidden" id="quiz-id">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Title *</label>
+                    <input type="text" id="quiz-title" required class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Description</label>
+                    <textarea id="quiz-description" rows="3" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none"></textarea>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Total Points (Auto-calculated)</label>
+                        <div id="quiz-total-points" class="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold">
+                            0
+                        </div>
+                        <p class="text-xs text-slate-500 mt-1">Sum of all question points</p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Status</label>
+                        <select id="quiz-status" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                            <option value="active">Active</option>
+                            <option value="draft">Draft</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="border-t border-slate-200 pt-4 mt-4">
+                    <div class="flex justify-between items-center mb-4">
+                        <h4 class="font-bold text-slate-800">Questions</h4>
+                        <button type="button" onclick="AdminQuizzes.addQuestion()" class="text-sm bg-slate-100 text-slate-700 px-3 py-1 rounded-lg hover:bg-slate-200">
+                            <i class="fas fa-plus"></i> Add Question
+                        </button>
+                    </div>
+                    <div id="quiz-questions" class="space-y-4">
+                        <!-- Questions rendered here -->
+                    </div>
+                </div>
+                
+                <div class="flex gap-3 pt-4">
+                    <button type="button" onclick="AdminUI.closeModal('modal-quiz')" class="flex-1 px-4 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-2 bg-rota-pink text-white rounded-lg hover:bg-rose-700 transition-colors">Save Quiz</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Quiz Submissions Modal -->
+    <div id="modal-quiz-submissions" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl w-full max-w-4xl p-6 relative shadow-2xl max-h-[90vh] flex flex-col">
+            <button onclick="AdminUI.closeModal('modal-quiz-submissions')" class="absolute top-4 right-4 w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200"><i class="fas fa-times"></i></button>
+            <div class="flex justify-between items-center mb-6">
+                <div>
+                    <h3 id="quiz-submissions-title" class="font-bold text-xl text-slate-800">Quiz Submissions</h3>
+                    <p id="quiz-submissions-count" class="text-sm text-slate-500 mt-1">0 submissions</p>
+                </div>
+                <button id="quiz-submissions-download" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2">
+                    <i class="fas fa-download"></i> Download CSV
+                </button>
+            </div>
+            <div id="quiz-submissions-list" class="flex-1 overflow-y-auto pr-2 space-y-3">
+                <!-- Submissions rendered here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Create/Edit Task Modal -->
+    <div id="modal-task" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+        <div class="bg-white rounded-2xl w-full max-w-2xl p-6 relative shadow-2xl my-8">
+            <button onclick="AdminUI.closeModal('modal-task')" class="absolute top-4 right-4 w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200"><i class="fas fa-times"></i></button>
+            <h3 id="task-modal-title" class="font-bold text-xl text-slate-800 mb-6">Create Task</h3>
+            <form id="task-form" onsubmit="AdminTasks.saveTask(event)" class="space-y-4">
+                <input type="hidden" id="task-id">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Title *</label>
+                    <input type="text" id="task-title" required class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Description *</label>
+                    <textarea id="task-description" rows="3" required class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none"></textarea>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Type *</label>
+                        <select id="task-type" onchange="AdminTasks.handleTypeChange()" required class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                            <option value="upload">File Upload</option>
+                            <option value="form">Form</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Points *</label>
+                        <input type="number" id="task-points" required min="1" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Status</label>
+                    <select id="task-status" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                        <option value="active">Active</option>
+                        <option value="inactive">Inactive</option>
+                    </select>
+                </div>
+                
+                <!-- Upload-specific fields -->
+                <div id="task-upload-fields" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Max File Size (MB)</label>
+                        <input type="number" id="task-max-size" value="5" min="1" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                    </div>
+                </div>
+                
+                <!-- Form-specific fields -->
+                <div id="task-form-fields" class="hidden space-y-4">
+                    <div class="flex justify-between items-center">
+                        <h4 class="font-bold text-slate-800">Form Fields</h4>
+                        <button type="button" onclick="AdminTasks.addFormField()" class="text-sm bg-slate-100 text-slate-700 px-3 py-1 rounded-lg hover:bg-slate-200">
+                            <i class="fas fa-plus"></i> Add Field
+                        </button>
+                    </div>
+                    <div id="task-form-fields-list" class="space-y-3">
+                        <!-- Form fields rendered here -->
+                    </div>
+                </div>
+                
+                <div class="flex gap-3 pt-4">
+                    <button type="button" onclick="AdminUI.closeModal('modal-task')" class="flex-1 px-4 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-2 bg-rota-pink text-white rounded-lg hover:bg-rose-700 transition-colors">Save Task</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Create/Edit Form/Survey Modal -->
+    <div id="modal-form" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+        <div class="bg-white rounded-2xl w-full max-w-2xl p-6 relative shadow-2xl my-8">
+            <button onclick="AdminUI.closeModal('modal-form')" class="absolute top-4 right-4 w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200"><i class="fas fa-times"></i></button>
+            <h3 id="form-modal-title" class="font-bold text-xl text-slate-800 mb-6">Create Form/Survey</h3>
+            <form id="form-form" onsubmit="AdminForms.saveForm(event)" class="space-y-4">
+                <input type="hidden" id="form-id">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Title *</label>
+                    <input type="text" id="form-title" required class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Description</label>
+                    <textarea id="form-description" rows="3" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none"></textarea>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Status</label>
+                        <select id="form-status" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Points</label>
+                        <input type="number" id="form-points" min="0" value="0" class="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rota-pink outline-none">
+                    </div>
+                </div>
+                
+                <!-- Form Fields -->
+                <div class="border-t border-slate-200 pt-4">
+                    <div class="flex justify-between items-center mb-4">
+                        <h4 class="font-bold text-slate-800">Form Fields</h4>
+                        <button type="button" onclick="AdminForms.addFormField()" class="text-sm bg-slate-100 text-slate-700 px-3 py-1 rounded-lg hover:bg-slate-200">
+                            <i class="fas fa-plus"></i> Add Field
+                        </button>
+                    </div>
+                    <div id="form-fields-list" class="space-y-3">
+                        <!-- Form fields rendered here -->
+                    </div>
+                </div>
+                
+                <div class="flex gap-3 pt-4">
+                    <button type="button" onclick="AdminUI.closeModal('modal-form')" class="flex-1 px-4 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-2 bg-rota-pink text-white rounded-lg hover:bg-rose-700 transition-colors">Save Form</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- TOAST -->
+    <div id="toast" class="fixed top-[-100px] left-1/2 transform -translate-x-1/2 bg-slate-900/90 backdrop-blur text-white px-6 py-3 rounded-full shadow-2xl z-[100] transition-all duration-300 flex items-center gap-3 w-max max-w-[90%]">
+        <i class="fas fa-check-circle text-green-400"></i>
+        <span id="toast-msg" class="text-sm font-medium">Notification</span>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/config.js"></script>
+    <script src="js/cache.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/toast.js"></script>
+    <script src="js/submission-helpers.js"></script>
+    <script src="js/db.js"></script>
+    <script src="js/admin-auth.js"></script>
+    <script src="js/admin-ui.js"></script>
+    <script src="js/admin-attendees.js"></script>
+    <script src="js/admin-quizzes.js"></script>
+    <script src="js/admin-tasks.js"></script>
+    <script src="js/admin-forms.js"></script>
+    <script src="js/admin-submissions.js"></script>
+    <script src="js/admin-leaderboard.js"></script>
+    <script src="js/admin-app.js"></script>
+    
+    </div> <!-- End main-content -->
+</body>
+</html>

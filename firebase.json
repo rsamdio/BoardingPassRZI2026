@@ -1,0 +1,16 @@
+{
+  "functions": {
+    "source": "functions",
+    "runtime": "nodejs20"
+  },
+  "firestore": {
+    "rules": "FIRESTORE_RULES.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "STORAGE_RULES.rules"
+  },
+  "database": {
+    "rules": "RTDB_RULES.json"
+  }
+}

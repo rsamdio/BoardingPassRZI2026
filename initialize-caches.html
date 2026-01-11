@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Initialize Caches</title>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-functions-compat.js"></script>
+    <script src="js/config.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 0;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        #status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            display: none;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .loading {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+    </style>
+</head>
+<body>
+    <h1>Initialize RTDB Caches</h1>
+    <p>This will populate all RTDB caches from Firestore data. Make sure you're logged in as an admin.</p>
+    
+    <button id="initBtn" onclick="initializeCaches()">Initialize Caches</button>
+    
+    <div id="status"></div>
+
+    <script>
+        // Initialize Firebase
+        if (typeof firebase !== 'undefined' && firebase.apps.length > 0) {
+            const auth = firebase.auth();
+            const functions = firebase.functions();
+            
+            // Check auth state and auto-run if logged in
+            auth.onAuthStateChanged((user) => {
+                if (!user) {
+                    showStatus('Please log in first. Redirecting to admin login...', 'info');
+                    setTimeout(() => {
+                        window.location.href = 'admin.html';
+                    }, 2000);
+                } else {
+                    document.getElementById('initBtn').disabled = false;
+                    // Auto-run if URL has ?auto=true
+                    if (window.location.search.includes('auto=true')) {
+                        setTimeout(() => initializeCaches(), 1000);
+                    }
+                }
+            });
+        } else {
+            showStatus('Firebase not initialized. Please check config.js', 'error');
+        }
+
+        async function initializeCaches() {
+            const btn = document.getElementById('initBtn');
+            const statusDiv = document.getElementById('status');
+            
+            btn.disabled = true;
+            showStatus('Initializing caches... This may take 5-10 minutes. Please wait and do not close this page...', 'loading');
+            
+            try {
+                // Ensure Firebase is initialized
+                if (!firebase.apps.length) {
+                    throw new Error('Firebase not initialized. Please refresh the page.');
+                }
+                
+                const functions = firebase.functions();
+                if (!functions) {
+                    throw new Error('Firebase Functions not available. Please check your Firebase configuration.');
+                }
+                
+                const initializeCaches = functions.httpsCallable('initializeCaches');
+                
+                // Call the function (timeout is configured on the server side)
+                const result = await initializeCaches();
+                
+                if (result && result.data) {
+                    if (result.data.success) {
+                        const stepsText = result.data.steps ? '\n\nSteps completed:\n' + result.data.steps.join('\n') : '';
+                        showStatus(`✅ Success! ${result.data.message}${stepsText}\nTimestamp: ${new Date(result.data.timestamp).toLocaleString()}`, 'success');
+                    } else {
+                        const stepsText = result.data.steps ? '\n\nSteps completed:\n' + result.data.steps.join('\n') : '';
+                        const errorText = result.data.error ? '\n\nError: ' + result.data.error : '';
+                        showStatus(`⚠️ Warning: ${result.data.message || 'Unknown response'}${stepsText}${errorText}`, 'error');
+                    }
+                } else {
+                    showStatus('⚠️ Warning: Unexpected response format', 'error');
+                }
+            } catch (error) {
+                console.error('Initialization error:', error);
+                let errorMessage = 'Failed to initialize caches';
+                
+                if (error.code === 'functions/unavailable') {
+                    errorMessage = 'Function is unavailable. Please check Firebase Functions status.';
+                } else if (error.code === 'functions/deadline-exceeded') {
+                    errorMessage = 'Function timed out. The initialization may still be running. Please check Firebase Console logs.';
+                } else if (error.code === 'functions/permission-denied') {
+                    errorMessage = 'Permission denied. Please ensure you are logged in as an admin.';
+                } else if (error.message) {
+                    errorMessage = error.message;
+                } else if (error.code) {
+                    errorMessage = `Error code: ${error.code}`;
+                }
+                
+                showStatus(`❌ Error: ${errorMessage}\n\nIf this persists, check the Firebase Console logs for more details.`, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = type;
+            statusDiv.style.display = 'block';
+        }
+    </script>
+</body>
+</html>

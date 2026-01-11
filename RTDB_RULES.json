@@ -1,0 +1,122 @@
+{
+  "rules": {
+    "cache": {
+      ".read": "auth != null",
+      ".write": false,
+      "users": {
+        "$uid": {
+          ".read": "auth != null && auth.uid == $uid",
+          ".write": false,
+          "pendingActivities": {
+            ".read": "auth != null && auth.uid == $uid"
+          },
+          "completedActivities": {
+            ".read": "auth != null && auth.uid == $uid"
+          },
+          "stats": {
+            ".read": "auth != null && auth.uid == $uid"
+          },
+          "completions": {
+            ".read": "auth != null && auth.uid == $uid"
+          }
+        },
+        "directory": {
+          ".read": "auth != null"
+        }
+      },
+      "activities": {
+        ".read": "auth != null"
+      },
+      "leaderboard": {
+        ".read": "auth != null"
+      },
+      "admin": {
+        ".read": "auth != null && root.child('admins').child(auth.uid).exists()"
+      }
+    },
+    "leaderboard": {
+      "top50": {
+        ".read": "auth != null",
+        ".write": false
+      }
+    },
+    "ranks": {
+      "$uid": {
+        ".read": "auth != null",
+        ".write": false
+      }
+    },
+    "adminCache": {
+      "emails": {
+        "$email": {
+          ".read": "auth != null && root.child('admins').child(auth.uid).exists()",
+          ".write": false
+        }
+      },
+      "participants": {
+        ".read": "auth != null && root.child('admins').child(auth.uid).exists()",
+        ".write": false
+      },
+      "stats": {
+        ".read": "auth != null && root.child('admins').child(auth.uid).exists()",
+        ".write": false
+      },
+      "recentActivity": {
+        ".read": "auth != null && root.child('admins').child(auth.uid).exists()",
+        ".write": false
+      },
+      "quizzes": {
+        ".read": "auth != null && root.child('admins').child(auth.uid).exists()",
+        ".write": false
+      },
+      "tasks": {
+        ".read": "auth != null && root.child('admins').child(auth.uid).exists()",
+        ".write": false
+      },
+      "forms": {
+        ".read": "auth != null && root.child('admins').child(auth.uid).exists()",
+        ".write": false
+      }
+    },
+    "attendeeCache": {
+      "activities": {
+        ".read": "auth != null",
+        ".write": false
+      },
+      "completions": {
+        "$userId": {
+          ".read": "auth != null && auth.uid == $userId",
+          ".write": false
+        }
+      },
+      "userStats": {
+        "$userId": {
+          ".read": "auth != null && auth.uid == $userId",
+          ".write": false
+        }
+      },
+      "directory": {
+        ".read": "auth != null",
+        ".write": false
+      },
+      "activityMetadata": {
+        ".read": "auth != null",
+        ".write": false
+      },
+      "notifications": {
+        "$userId": {
+          ".read": "auth != null && auth.uid == $userId",
+          ".write": false
+        }
+      }
+    },
+    "admins": {
+      "$uid": {
+        ".read": "auth != null && root.child('admins').child(auth.uid).exists()",
+        ".write": false
+      }
+    },
+    ".read": false,
+    ".write": false
+  }
+}

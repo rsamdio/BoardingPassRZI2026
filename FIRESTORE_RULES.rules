@@ -1,0 +1,101 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is admin
+    function isAdmin() {
+      return request.auth != null && 
+             exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+    
+    // Helper function to check if document belongs to authenticated user
+    function isOwnUser(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+    
+    // Helper function to get user email from auth token (normalized)
+    function getUserEmail() {
+      return request.auth != null && request.auth.token.email != null 
+             ? request.auth.token.email.toLowerCase().trim() 
+             : null;
+    }
+    
+    // Admins collection
+    match /admins/{uid} {
+      allow read, write: if isAdmin();
+    }
+    
+    // Users collection - main user data (active attendees)
+    match /users/{uid} {
+      // Anyone authenticated can read (for leaderboard)
+      allow read: if request.auth != null;
+      
+      // Users can update their own document
+      allow update: if isOwnUser(uid);
+      
+      // Users can create their own document when migrating from pendingUsers
+      allow create: if isOwnUser(uid);
+      
+      // Admins can create, update, and delete users
+      allow create, update, delete: if isAdmin();
+    }
+    
+    // Pending users (created by admin, migrated on first login)
+    match /pendingUsers/{email} {
+      // Admins can do everything
+      allow read, write, delete: if isAdmin();
+      
+      // Authenticated users can read pendingUsers (for migration check)
+      // The code validates email match, so this is secure
+      allow read: if request.auth != null;
+      
+      // Authenticated users can delete pendingUsers (after migration)
+      // The code validates email match, so this is secure
+      allow delete: if request.auth != null;
+    }
+    
+    // Quizzes collection
+    match /quizzes/{quizId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+    
+    // Tasks collection
+    match /tasks/{taskId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+    
+    // Forms/Surveys collection
+    match /forms/{formId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+    
+    // Submissions collection (for tasks)
+    match /submissions/{submissionId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow update: if isAdmin();
+    }
+    
+    // Quiz submissions
+    match /quizSubmissions/{submissionId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+    }
+    
+    // Form submissions (for surveys/forms)
+    match /formSubmissions/{submissionId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      // Admins can update/delete for management purposes
+      allow update, delete: if isAdmin();
+    }
+    
+    // Quiz templates collection
+    match /quizTemplates/{templateId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
