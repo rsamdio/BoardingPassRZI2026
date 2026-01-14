@@ -175,49 +175,55 @@ const Forms = {
                 submittedAt: submittedAt // Use Firestore Timestamp if available
             };
             
-            // Submit to database
-            await DB.submitForm(submission);
+            // IMMEDIATE UX: Show submitting state on card BEFORE database write
+            SubmissionHelpers.showSubmittingState(this.currentForm.id, 'form');
             
             // Update button text
             if (submitBtn) {
-                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Processing...';
+                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Submitting...';
+                submitBtn.disabled = true;
             }
             
-            // Mark as completed locally
-            // Use the same timestamp format as Cloud Function will use
-            await CompletionManager.markCompletedLocally(
-                Auth.currentUser.uid,
-                'form',
-                this.currentForm.id,
-                {
-                    submittedAt: submittedAtTimestamp
-                }
-            );
-            
-            // Clear all related caches
-            CompletionManager.clearCompletionCaches(
+            // Optimistic update: Remove form from pending activities list immediately
+            await SubmissionHelpers.optimisticallyRemoveFromPending(
                 Auth.currentUser.uid,
                 'form',
                 this.currentForm.id
             );
             
-            // Award points if form has points
-            if (this.currentForm.points > 0) {
-                await DB.addPoints(Auth.currentUser.uid, this.currentForm.points, `Form: ${this.currentForm.title}`);
-                
-                // Points are already updated via addPoints() which does Firestore write
-                // User stats will be updated by Cloud Function in RTDB cache
-                // If user data refresh is needed, use getUserStats() from RTDB cache instead of getUser()
-                // This saves 1 Firestore read per form submission
-            }
-            
-            // Close modal
+            // Close modal immediately (don't wait for database)
             closeModal('modal-survey-form');
             
-            // Refresh UI
-            await SubmissionHelpers.refreshUIAfterSubmission('form');
+            // Show success toast immediately
+            Toast.success('Form submitted successfully!');
             
-            showToast('✓ Form submitted successfully!', 'success');
+            // Submit to database (async - don't wait for Cloud Function)
+            DB.submitForm(submission)
+                .then(() => {
+                    // Mark as completed locally
+                    CompletionManager.markCompletedLocally(
+                        Auth.currentUser.uid,
+                        'form',
+                        this.currentForm.id,
+                        {
+                            submittedAt: submittedAtTimestamp
+                        }
+                    );
+                    
+                    // Award points if form has points (async)
+                    if (this.currentForm.points > 0) {
+                        DB.addPoints(Auth.currentUser.uid, this.currentForm.points, `Form: ${this.currentForm.title}`)
+                            .catch(error => {
+                                console.error('Error awarding points:', error);
+                            });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error submitting form:', error);
+                    Toast.error('Failed to submit form. Please try again.');
+                    // Rollback optimistic update on error
+                    SubmissionHelpers.rollbackSubmission(this.currentForm.id, 'form');
+                });
         } catch (error) {
             // Re-enable button and form fields on error
             if (submitBtn) {

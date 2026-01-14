@@ -70,7 +70,53 @@
         .view-section { display: none !important; }
         .view-section.active { display: flex !important; flex-direction: column; animation: fadeIn 0.3s ease-out; }
         
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes fadeOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-10px); } }
+        @keyframes fadeOutSlideDown {
+            from { opacity: 1; transform: translateY(0); }
+            to { opacity: 0; transform: translateY(20px); }
+        }
+        .animate-fade-in { animation: fadeIn 0.3s ease-in; }
+        .animate-fade-out { animation: fadeOut 0.3s ease-out; }
+        .fade-out-slide-down { animation: fadeOutSlideDown 0.3s ease-out forwards; }
+        
+        /* Submission states */
+        .submitting-state {
+            opacity: 0.7;
+            position: relative;
+        }
+        .submitting-state::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: rgba(59, 130, 246, 0.1);
+            border-radius: inherit;
+            z-index: 1;
+        }
+        .success-state {
+            opacity: 1;
+            position: relative;
+            background: linear-gradient(135deg, rgba(34, 197, 94, 0.1) 0%, rgba(34, 197, 94, 0.05) 100%);
+            border-color: rgba(34, 197, 94, 0.3);
+        }
+        .success-state::before {
+            content: '✓';
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            width: 1.5rem;
+            height: 1.5rem;
+            background: #22c55e;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.75rem;
+            font-weight: bold;
+            z-index: 2;
+            animation: fadeIn 0.3s ease-out;
+        }
         
         /* RZI Brand Gradients */
         .gradient-hero {
@@ -116,7 +162,7 @@
         
     </style>
 </head>
-<body class="bg-slate-50 text-slate-800 font-sans h-screen w-screen overflow-hidden flex flex-col">
+<body class="bg-slate-50 text-slate-800 font-sans min-h-screen w-screen overflow-x-hidden flex flex-col">
 
     <!-- LOADING OVERLAY -->
     <div id="app-loader" class="fixed inset-0 bg-white z-50 flex flex-col items-center justify-center transition-opacity duration-500">
@@ -143,7 +189,7 @@
     <main class="flex-1 overflow-y-auto no-scrollbar relative bg-slate-50 w-full">
         
         <!-- VIEW: LOGIN -->
-        <div id="view-login" class="view-section h-full items-center justify-center p-6 bg-gradient-to-br from-rota-pink to-rose-700 text-white">
+        <div id="view-login" class="view-section h-full min-h-screen items-center justify-center p-6 bg-gradient-to-br from-rota-pink to-rose-700 text-white">
             <div class="w-40 h-auto mb-8 flex items-center justify-center">
                 <div class="bg-white rounded-2xl shadow-xl p-3 flex items-center justify-center">
                     <img src="rzilogo.webp" alt="Rotaract Zone Institute 2026 Chennai" class="w-full h-auto object-contain max-w-[140px]">
@@ -525,6 +571,7 @@
     <script src="js/cache.js"></script>
     <script src="js/utils.js"></script>
     <script src="js/toast.js"></script>
+    <script src="js/optimistic-ui.js"></script>
     <script src="js/submission-helpers.js"></script>
     <script src="js/completion-manager.js"></script>
     <script src="js/auth.js"></script>

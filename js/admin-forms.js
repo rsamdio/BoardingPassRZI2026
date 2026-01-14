@@ -8,6 +8,7 @@ const AdminForms = {
     draftAutoSaveInterval: null,
     currentStep: 1,
     totalSteps: 2,
+    formsListener: null, // Real-time listener for forms cache
     currentFormSubmissions: {
         form: null,
         submissions: [],
@@ -33,7 +34,20 @@ const AdminForms = {
             
             // Ensure forms have timestamps for sorting
             this.forms = this.forms.map(form => {
-                // If timestamps are missing, set to 0 (will sort to bottom)
+                if (form.updatedAt && typeof form.updatedAt !== 'number') {
+                    if (typeof form.updatedAt.toMillis === 'function') {
+                        form.updatedAt = form.updatedAt.toMillis();
+                    } else if (form.updatedAt.seconds !== undefined) {
+                        form.updatedAt = form.updatedAt.seconds * 1000 + (form.updatedAt.nanoseconds || 0) / 1000000;
+                    }
+                }
+                if (form.createdAt && typeof form.createdAt !== 'number') {
+                    if (typeof form.createdAt.toMillis === 'function') {
+                        form.createdAt = form.createdAt.toMillis();
+                    } else if (form.createdAt.seconds !== undefined) {
+                        form.createdAt = form.createdAt.seconds * 1000 + (form.createdAt.nanoseconds || 0) / 1000000;
+                    }
+                }
                 if (!form.updatedAt && !form.createdAt) {
                     form.createdAt = 0;
                 }
@@ -41,6 +55,9 @@ const AdminForms = {
             });
             
             this.render();
+            
+            // Setup real-time listener for forms cache updates
+            this.setupRealtimeListener();
         } catch (error) {
             console.error('Error loading forms:', error);
             Toast.error('Failed to load forms');
@@ -48,6 +65,62 @@ const AdminForms = {
         } finally {
             this.loading = false;
             AdminUI.setLoading('forms', false);
+        }
+    },
+    
+    /**
+     * Setup real-time listener for forms cache
+     * Automatically refreshes the list when forms are created/updated/deleted
+     */
+    setupRealtimeListener() {
+        // Remove existing listener if any
+        if (this.formsListener) {
+            DB.rtdb.ref('adminCache/forms').off('value', this.formsListener);
+            this.formsListener = null;
+        }
+        
+        // Create new listener
+        this.formsListener = (snapshot) => {
+            if (snapshot.exists()) {
+                const cacheData = snapshot.val();
+                const lastUpdated = cacheData.lastUpdated || 0;
+                
+                // Convert object to array, exclude lastUpdated
+                const forms = Object.keys(cacheData)
+                    .filter(key => key !== 'lastUpdated')
+                    .map(key => {
+                        const form = cacheData[key];
+                        return {
+                            ...form,
+                            id: key,
+                            formFieldsCount: form.formFieldsCount || form.formFields?.length || 0
+                        };
+                    });
+                
+                // Sort by updatedAt or createdAt (newest first)
+                forms.sort((a, b) => {
+                    const aTime = a.updatedAt || a.createdAt || 0;
+                    const bTime = b.updatedAt || b.createdAt || 0;
+                    return bTime - aTime;
+                });
+                
+                // Update local state and render
+                this.forms = forms;
+                this.render();
+            }
+        };
+        
+        // Attach listener
+        DB.rtdb.ref('adminCache/forms').on('value', this.formsListener);
+    },
+    
+    /**
+     * Cleanup: Remove real-time listener
+     */
+    cleanup() {
+        if (this.formsListener) {
+            DB.rtdb.ref('adminCache/forms').off('value', this.formsListener);
+            this.formsListener = null;
         }
     },
     
@@ -99,7 +172,8 @@ const AdminForms = {
         
         sortedForms.forEach(form => {
             const card = document.createElement('div');
-            card.className = 'bg-white border border-slate-200 rounded-xl p-6 hover:shadow-md transition-shadow';
+            card.className = 'bg-white border border-slate-200 rounded-xl p-6 hover:shadow-md transition-all duration-300';
+            card.setAttribute('data-form-id', form.id);
             card.innerHTML = `
                 <div class="flex justify-between items-start mb-4">
                     <div>
@@ -648,26 +722,91 @@ const AdminForms = {
                 description,
                 formFields,
                 points,
-                status: status || 'inactive'
+                // Default to 'active' for new forms, preserve existing status for updates
+                status: status || (formId ? 'inactive' : 'active')
             };
             
             // Save to database
             let savedFormId = formId;
+            let operationId = null;
+            
             if (formId) {
-                // Update: set updatedAt timestamp
+                // UPDATE: Optimistic update
+                const existingForm = this.forms.find(f => f.id === formId);
+                if (existingForm) {
+                    const updatedForm = {
+                        ...existingForm,
+                        ...data,
+                        id: formId,
+                        formFieldsCount: data.formFields?.length || 0,
+                        updatedAt: Date.now() // Temporary timestamp
+                    };
+                    operationId = OptimisticUI.updateItem('form', formId, updatedForm, () => {
+                        this.render();
+                    }, this.forms);
+                }
+                
+                // Firestore update (async, don't wait)
                 data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
-                await DB.db.collection('forms').doc(formId).update(data);
-                Toast.success('Form updated successfully');
+                DB.db.collection('forms').doc(formId).update(data)
+                    .then(() => {
+                        Toast.success('Form updated successfully');
+                    })
+                    .catch((error) => {
+                        console.error('Error updating form:', error);
+                        Toast.error('Failed to update form: ' + error.message);
+                        // Rollback optimistic update on error
+                        if (operationId) {
+                            OptimisticUI.rollback(operationId, () => {
+                                this.render();
+                            });
+                        }
+                    });
             } else {
-                // Create: set both createdAt and updatedAt timestamps
-                const docRef = await DB.db.collection('forms').add({
+                // CREATE: Optimistic add
+                const newForm = {
+                    ...data,
+                    id: 'temp_' + Date.now(), // Temporary ID
+                    formFieldsCount: data.formFields?.length || 0,
+                    submissionCount: 0,
+                    createdAt: Date.now(),
+                    updatedAt: Date.now()
+                };
+                operationId = OptimisticUI.addItem('form', newForm, () => {
+                    this.render();
+                }, this.forms);
+                
+                // Firestore create (async, don't wait)
+                DB.db.collection('forms').add({
                     ...data,
                     submissionCount: 0,
                     createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
-                savedFormId = docRef.id;
-                Toast.success('Form created successfully');
+                })
+                    .then((docRef) => {
+                        savedFormId = docRef.id;
+                        Toast.success('Form created successfully');
+                        
+                        // Update the optimistic item with real ID
+                        const tempIndex = this.forms.findIndex(f => f.id === newForm.id);
+                        if (tempIndex !== -1) {
+                            this.forms[tempIndex] = {
+                                ...this.forms[tempIndex],
+                                id: savedFormId
+                            };
+                            this.render();
+                        }
+                    })
+                    .catch((error) => {
+                        console.error('Error creating form:', error);
+                        Toast.error('Failed to create form: ' + error.message);
+                        // Rollback optimistic update on error
+                        if (operationId) {
+                            OptimisticUI.rollback(operationId, () => {
+                                this.render();
+                            });
+                        }
+                    });
             }
             
             // Stop auto-save after successful save
@@ -675,38 +814,9 @@ const AdminForms = {
             // Clear draft after successful save
             localStorage.removeItem('form_draft');
             
-            // Invalidate cache
-            DB.invalidateCache('form');
-            Cache.clear('cache_forms_list');
-            
-            // Wait briefly for Cloud Function to update RTDB cache (usually <1 second)
-            // This allows the cache to be populated before we read from it
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            
-            // Use RTDB cache instead of Firestore (cost optimization)
-            // Cloud Function already updates the cache, so we can read from it
-            try {
-                this.forms = await DB.getAllForms();
-            } catch (error) {
-                // Fallback to Firestore if RTDB cache read fails
-                const snapshot = await DB.db.collection('forms').get();
-                this.forms = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            }
-            
-            // Temporarily set loading to true to prevent load() from overwriting our fresh data
-            const wasLoading = this.loading;
-            this.loading = true;
-            
-            // Switch back to forms list view
+            // Return to forms view immediately (optimistic UI already rendered)
             AdminUI.switchView('forms');
-            
-            // Render immediately with the fresh data we just fetched
-            this.render();
-            
-            // Reset loading state after a brief delay to allow render
-            setTimeout(() => {
-                this.loading = wasLoading;
-            }, 500);
+            // Real-time listener will confirm the update when Cloud Function completes
         } catch (error) {
             console.error('Error saving form:', error);
             Toast.error('Failed to save form: ' + error.message);
@@ -898,22 +1008,69 @@ const AdminForms = {
             return;
         }
         
-        if (!confirm('Are you sure you want to delete this form? All submissions will be deleted. This action cannot be undone.')) {
+        // Enhanced confirmation dialog
+        const form = this.forms.find(f => f.id === formId);
+        const formTitle = form?.title || 'this form';
+        
+        if (!confirm(`⚠️ Delete Form?\n\nForm: "${formTitle}"\n\nThis will:\n• Delete the form permanently\n• Remove it from all users' pending missions\n• Delete all associated submissions\n\nThis action cannot be undone.`)) {
             return;
         }
         
         try {
-            await DB.db.collection('forms').doc(formId).delete();
-            Toast.success('Form deleted successfully');
-            DB.invalidateCache('form');
-            Cache.clear('cache_forms_list');
+            // Show loading state
+            const formCard = document.querySelector(`[data-form-id="${formId}"]`);
+            if (formCard) {
+                formCard.style.opacity = '0.5';
+                formCard.style.pointerEvents = 'none';
+                const deleteBtn = formCard.querySelector('[onclick*="deleteForm"]');
+                if (deleteBtn) {
+                    deleteBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+                    deleteBtn.disabled = true;
+                }
+            }
             
-            // Force refresh from Firestore to see updated list immediately
-            const snapshot = await DB.db.collection('forms').get();
-            this.forms = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            this.render();
+            // Optimistic UI update: Remove from local list immediately with fade-out
+            const operationId = OptimisticUI.removeItem('form', formId, () => {
+                this.render();
+            }, this.forms);
+            
+            // Delete from Firestore (async, triggers Cloud Function)
+            DB.db.collection('forms').doc(formId).delete()
+                .then(() => {
+                    // Clear caches
+                    DB.invalidateCache('form');
+                    Cache.clear('cache_forms_list');
+                    
+                    // Show success message
+                    Toast.success(`Form "${formTitle}" deleted successfully. It will be removed from all users' pending missions shortly.`);
+                    
+                    // Real-time listener will confirm the update when Cloud Function completes
+                })
+                .catch((error) => {
+                    console.error('Error deleting form:', error);
+                    Toast.error('Failed to delete form: ' + error.message);
+                    
+                    // Rollback optimistic update on error
+                    if (operationId) {
+                        OptimisticUI.rollback(operationId, () => {
+                            this.render();
+                        });
+                    }
+                    
+                    // Restore UI on error
+                    const formCard = document.querySelector(`[data-form-id="${formId}"]`);
+                    if (formCard) {
+                        formCard.style.opacity = '1';
+                        formCard.style.pointerEvents = 'auto';
+                        const deleteBtn = formCard.querySelector('[onclick*="deleteForm"]');
+                        if (deleteBtn) {
+                            deleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
+                            deleteBtn.disabled = false;
+                        }
+                    }
+                });
         } catch (error) {
-            console.error('Error deleting form:', error);
+            console.error('Error in deleteForm:', error);
             Toast.error('Failed to delete form: ' + error.message);
         }
     },

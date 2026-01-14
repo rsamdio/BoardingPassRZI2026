@@ -204,23 +204,49 @@ const UI = {
         // Listen for pre-computed list updates (version changes trigger refresh)
         const pendingMetadataRef = DB.rtdb.ref(`cache/users/${userId}/pendingActivities/metadata`);
         let lastPendingVersion = null;
+        let lastPendingTimestamp = null;
+        
         pendingMetadataRef.on('value', (snapshot) => {
             if (snapshot.exists()) {
                 const metadata = snapshot.val();
                 const currentVersion = metadata.version || 0;
-                // Check if version changed (including initial load)
-                if (lastPendingVersion !== null && lastPendingVersion !== currentVersion) {
+                const currentTimestamp = metadata.lastUpdated || 0;
+                
+                // Check if version changed (simplified - version is sufficient)
+                const versionChanged = lastPendingVersion !== null && lastPendingVersion !== currentVersion;
+                
+                if (versionChanged) {
                     // Clear cache to force fresh fetch
                     const cacheKey = `rtdb_cache_cache_users_${userId}_pendingActivities_combined`;
                     Cache.clear(cacheKey);
-                    // Refresh pending activities
+                    
+                    // Show subtle notification for real-time updates
+                    console.log(`[Real-time] Pending activities updated (v${lastPendingVersion} → v${currentVersion})`);
+                    
+                    // Refresh pending activities immediately
                     this.renderPendingActivities();
                 }
+                
                 lastPendingVersion = currentVersion;
                 Cache.set(`pending_activities_version_${userId}`, currentVersion, 'SYSTEM');
             }
         }, (error) => {
             console.error('Error listening to pending activities updates:', error);
+        });
+        
+        // Listen directly to the combined list for immediate updates
+        // Simplified: Only track version changes, not hash comparison
+        const pendingListRef = DB.rtdb.ref(`cache/users/${userId}/pendingActivities/combined`);
+        pendingListRef.on('value', (snapshot) => {
+            if (snapshot.exists()) {
+                // Version-based change detection is handled by metadata listener above
+                // This listener is kept for redundancy but simplified
+                const cacheKey = `rtdb_cache_cache_users_${userId}_pendingActivities_combined`;
+                Cache.clear(cacheKey);
+                // Metadata listener will trigger renderPendingActivities
+            }
+        }, (error) => {
+            console.error('Error listening to pending activities list:', error);
         });
         
         // Listen for completed activities updates
@@ -299,18 +325,62 @@ const UI = {
         });
         
         // Listen for activities metadata (indexed structure version changes)
-        const activitiesMetadataRef = DB.rtdb.ref('cache/activities/quizzes/metadata');
-        activitiesMetadataRef.on('value', (snapshot) => {
+        // Listen to all activity types (quizzes, tasks, forms) for changes
+        const activitiesMetadataRefs = [
+            DB.rtdb.ref('cache/activities/quizzes/metadata'),
+            DB.rtdb.ref('cache/activities/tasks/metadata'),
+            DB.rtdb.ref('cache/activities/forms/metadata')
+        ];
+        
+        // Track last metadata versions for each activity type
+        const lastMetadataVersions = {
+            quizzes: null,
+            tasks: null,
+            forms: null
+        };
+        
+        const activitiesListener = (snapshot, activityType) => {
             if (snapshot.exists()) {
-                // Activities updated - refresh if activities tab is active
-                const activeView = document.querySelector('.view-section.active')?.id;
-                if (activeView === 'view-activities' || activeView === 'view-home') {
-                    this.renderActivities();
-                    this.renderPendingActivities();
+                const metadata = snapshot.val();
+                const currentVersion = metadata.version || 0;
+                const currentTimestamp = metadata.lastUpdated || 0;
+                
+                // Check if version or timestamp changed
+                const lastVersion = lastMetadataVersions[activityType];
+                const versionChanged = lastVersion !== null && lastVersion !== currentVersion;
+                
+                if (versionChanged) {
+                    console.log(`[Real-time] ${activityType} metadata updated (v${lastVersion} → v${currentVersion})`);
+                    
+                    // Clear all pending activities cache keys to force fresh fetch
+                    const cacheKey = `rtdb_cache_cache_users_${userId}_pendingActivities_combined`;
+                    Cache.clear(cacheKey);
+                    
+                    // Always refresh if home or activities view is active
+                    const activeView = document.querySelector('.view-section.active')?.id;
+                    if (activeView === 'view-activities' || activeView === 'view-home') {
+                        this.renderActivities();
+                        this.renderPendingActivities();
+                    } else {
+                        // Even if not active, clear cache so next view shows fresh data
+                        Cache.clear(cacheKey);
+                    }
                 }
+                
+                lastMetadataVersions[activityType] = currentVersion;
             }
-        }, (error) => {
-            console.error('Error listening to activities updates:', error);
+        };
+        
+        // Set up listeners for each activity type
+        activitiesMetadataRefs.forEach((ref, index) => {
+            const activityTypes = ['quizzes', 'tasks', 'forms'];
+            const activityType = activityTypes[index];
+            
+            ref.on('value', (snapshot) => {
+                activitiesListener(snapshot, activityType);
+            }, (error) => {
+                console.error(`Error listening to ${activityType} updates:`, error);
+            });
         });
         
     },
@@ -327,61 +397,64 @@ const UI = {
         
         try {
             // Just fetch pre-computed list (no filtering needed!)
+            // The server-side pre-computation already handles all filtering correctly
             const pending = await DB.getPendingActivities(Auth.currentUser.uid);
             
             // Only filter by search (simple text matching)
             const searchTerm = document.getElementById('activity-search')?.value || '';
             const filtered = DB.filterBySearch(pending, searchTerm);
             
-            // CRITICAL: Filter out completed/submitted items using completion status
-            // Note: Pre-computed list should already be filtered, but this ensures consistency
-            const completionStatus = await DB.getUserCompletionStatus(Auth.currentUser.uid, false, true).catch(() => ({ quizzes: {}, tasks: {}, forms: {} }));
+            // CRITICAL FIX: Trust the pre-computed list from server
+            // The server already filters out:
+            // - Completed quizzes/forms
+            // - Tasks with status 'pending' or 'approved'
+            // - Deleted activities (explicitly excluded)
+            // Additional client-side filtering was causing issues with stale completion status
             
-            // Filter out completed items explicitly
-            const pendingItems = filtered.filter(item => {
-                const itemId = item.id || item.quizId || item.taskId || item.formId;
-                if (!itemId) return false;
-                
-                const itemType = item.itemType || (item.quizId ? 'quiz' : item.taskId ? 'task' : item.formId ? 'form' : null);
-                if (!itemType) return false;
-                
-                // Fix pluralization: quiz -> quizzes, task -> tasks, form -> forms
-                const typeKey = itemType === 'quiz' ? 'quizzes' : `${itemType}s`;
-                const completion = completionStatus[typeKey]?.[itemId];
-                
-                // For tasks, check the status - don't show if pending (submitted, waiting review) or approved (completed)
-                if (itemType === 'task' && completion) {
-                    const status = completion.status;
-                    if (status === 'pending' || status === 'approved') {
-                        return false; // Don't show in pending
-                    }
-                    if (status === 'rejected') {
-                        return true; // Show rejected tasks (can resubmit)
-                    }
+            // FALLBACK: Verify activities exist in indexed cache (safety check for deleted items)
+            // If a task appears in the list but doesn't exist in indexed cache, it was deleted
+            let verifiedFiltered = filtered;
+            const tasksToVerify = filtered.filter(item => item.itemType === 'task' || item.taskId);
+            if (tasksToVerify.length > 0) {
+                try {
+                    const tasksCache = await DB.readFromCache('activities/tasks/byId', {
+                        useLocalStorage: false,
+                        ttl: 0
+                    });
+                    const existingTaskIds = tasksCache.data ? Object.keys(tasksCache.data) : [];
+                    
+                    // Filter out tasks that don't exist in indexed cache (they were deleted)
+                    verifiedFiltered = filtered.filter(item => {
+                        if (item.itemType === 'task' || item.taskId) {
+                            const taskId = item.id || item.taskId;
+                            const exists = existingTaskIds.includes(taskId);
+                            if (!exists) {
+                                console.log(`[renderPendingActivities] Filtered out deleted task: ${taskId}`);
+                            }
+                            return exists;
+                        }
+                        return true; // Keep non-tasks
+                    });
+                } catch (error) {
+                    console.warn('[renderPendingActivities] Failed to verify tasks, using original list:', error);
+                    // Continue with original filtered list if verification fails
                 }
-                
-                // For quizzes and forms, check if completed
-                const isCompleted = !!completion;
-                
-                return !isCompleted;
+            }
+            
+            // Map items to ensure proper structure
+            const allItems = verifiedFiltered.map(item => {
+                // For tasks, check the type field to determine if it's a form task
+                const isFormTask = item.itemType === 'task' && item.type === 'form';
+                const baseItem = {
+                    ...item,
+                    itemType: item.itemType || 'task',
+                    // Preserve the type field for tasks (form vs upload)
+                    type: item.type || (item.itemType === 'task' ? 'upload' : undefined),
+                    isTask: item.itemType === 'task',
+                    desc: item.description || (item.itemType === 'quiz' ? 'Test your knowledge now!' : 'Complete this activity')
+                };
+                return baseItem;
             });
-            
-            // Use CompletionManager to filter activities (additional safety check)
-            const allItems = CompletionManager.filterActivities(pendingItems, completionStatus, 'pending')
-                .map(item => {
-                    // For tasks, check the type field to determine if it's a form task
-                    const isFormTask = item.itemType === 'task' && item.type === 'form';
-                    const baseItem = {
-                        ...item,
-                        itemType: item.itemType || 'task',
-                        // Preserve the type field for tasks (form vs upload)
-                        type: item.type || (item.itemType === 'task' ? 'upload' : undefined),
-                        isTask: item.itemType === 'task',
-                        desc: item.description || (item.itemType === 'quiz' ? 'Test your knowledge now!' : 'Complete this activity')
-                    };
-                    return baseItem;
-                });
-            
             
             this.renderPendingActivitiesList(allItems);
         } catch (error) {
@@ -406,7 +479,7 @@ const UI = {
         if (!listEl) return;
         
         listEl.innerHTML = '';
-        
+
         if (allItems.length === 0) {
             listEl.innerHTML = `
                 <div class="p-8 text-center flex flex-col items-center">
@@ -419,38 +492,64 @@ const UI = {
             `;
             return;
         }
-        
+
         allItems.forEach(item => {
-            let icon, btnText, btnIcon, action;
+            // Icon + button configuration per activity type
+            // Use separate classes for background and icon color to keep the UI clean
+            let iconBgClass = '';
+            let iconColorClass = '';
+            let iconGlyph = '';
+            let btnText;
+            let btnIcon;
+            let action;
+
             if (item.itemType === 'quiz') {
-                icon = 'fa-puzzle-piece text-purple-500 bg-purple-100';
+                // Quizzes: purple puzzle icon
+                iconGlyph = 'fa-puzzle-piece';
+                iconBgClass = 'bg-violet-100';
+                iconColorClass = 'text-violet-600';
                 btnText = 'Start Quiz';
                 btnIcon = 'fa-play';
                 action = `Quiz.startQuiz('${item.id}')`;
             } else if (item.itemType === 'form' && item.isTask === false) {
                 // This is a standalone form/survey (from forms collection)
-                icon = 'fa-file-alt text-blue-500 bg-blue-100';
-                btnText = 'Fill Form';
+                // Treat as survey: clipboard icon, cool blue tone
+                iconGlyph = 'fa-clipboard-list';
+                iconBgClass = 'bg-sky-100';
+                iconColorClass = 'text-sky-600';
+                btnText = 'Take Survey';
                 btnIcon = 'fa-pen';
                 action = `Forms.openForm('${item.id}')`;
             } else if (item.itemType === 'task' && item.type === 'form') {
                 // This is a task-type form (from tasks collection with type: 'form')
-                icon = 'fa-file-alt text-blue-500 bg-blue-100';
-                btnText = 'Fill Form';
+                // Differentiate from surveys with a green checklist icon
+                iconGlyph = 'fa-list-check';
+                iconBgClass = 'bg-emerald-100';
+                iconColorClass = 'text-emerald-600';
+                btnText = 'Fill Task Form';
                 btnIcon = 'fa-pen';
                 action = `Task.openFormModal('${item.id}')`;
             } else {
-                icon = 'fa-camera text-rota-pink bg-rose-100';
+                // Upload tasks: camera/upload icon in brand pink
+                iconGlyph = 'fa-camera';
+                iconBgClass = 'bg-rose-100';
+                iconColorClass = 'text-rota-pink';
                 btnText = 'Upload Proof';
                 btnIcon = 'fa-upload';
                 action = `Task.openUploadModal('${item.id}')`;
             }
             
+            const itemId = item.id || item.taskId || item.quizId || item.formId;
+            const itemType = item.itemType || 'task';
+            
             listEl.innerHTML += `
-                <div class="p-4 bg-white hover:bg-slate-50 transition-colors group">
+                <div class="pending-activity-card p-4 bg-white hover:bg-slate-50 transition-all duration-300 group animate-fade-in" 
+                     data-activity-id="${itemId}" 
+                     data-activity-type="${itemType}"
+                     style="animation: fadeIn 0.3s ease-in;">
                     <div class="flex items-start gap-3 mb-3">
-                        <div class="w-10 h-10 rounded-full ${icon} flex items-center justify-center shrink-0">
-                            <i class="fas ${icon.split(' ')[0]}"></i>
+                        <div class="w-10 h-10 rounded-full ${iconBgClass} flex items-center justify-center shrink-0">
+                            <i class="fas ${iconGlyph} ${iconColorClass}"></i>
                         </div>
                         <div class="flex-1">
                             <div class="flex justify-between items-start">

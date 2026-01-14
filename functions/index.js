@@ -17,7 +17,8 @@ const rtdb = admin.database();
 
 /**
  * Update leaderboard cache in RTDB
- * Fetches top users from Firestore and caches them
+ * - Writes top 50 users for the leaderboard modal
+ * - Computes and stores rank for **all** active attendees
  */
 async function updateLeaderboardCache() {
   try {
@@ -25,43 +26,67 @@ async function updateLeaderboardCache() {
         .where("role", "==", "attendee")
         .where("status", "==", "active")
         .orderBy("points", "desc")
-        .limit(50) // Cache top 50 for leaderboard
         .get();
 
     const leaderboardData = {};
+    const rankUpdates = {};
     let index = 0;
 
     usersSnapshot.forEach((doc) => {
       const data = doc.data();
-      leaderboardData[index] = {
-        uid: doc.id,
-        name: data.name || data.displayName || "User",
-        email: data.email || null,
-        district: data.district || null,
-        designation: data.designation || null,
-        points: data.points || 0,
-        photoURL: data.photoURL || data.photo || null,
-        photo: data.photoURL || data.photo || null, // Keep both for backward compatibility
+      const points = data.points || 0;
+      const rank = index + 1;
+
+      // Build top 50 leaderboard data (index 0–49)
+      if (index < 50) {
+        leaderboardData[index] = {
+          uid: doc.id,
+          name: data.name || data.displayName || "User",
+          email: data.email || null,
+          district: data.district || null,
+          designation: data.designation || null,
+          points: points,
+          photoURL: data.photoURL || data.photo || null,
+          photo: data.photoURL || data.photo || null, // Keep both for backward compatibility
+        };
+      }
+
+      // Rank data for this user (all users)
+      const rankData = {
+        rank: rank,
+        points: points,
+        lastUpdated: Date.now(),
       };
+
+      rankUpdates[`ranks/${doc.id}`] = rankData;
+      rankUpdates[`cache/leaderboard/ranks/${doc.id}`] = rankData;
+
       index++;
     });
 
-    // Fill remaining slots with null if less than 50
+    // Fill remaining leaderboard slots with null if less than 50
     for (let i = index; i < 50; i++) {
-      leaderboardData[i] = null;
+      if (leaderboardData[i] === undefined) {
+        leaderboardData[i] = null;
+      }
     }
 
-    // Update both old path (for backward compatibility) and new path
+    // Persist leaderboard and rank caches
     await Promise.all([
       rtdb.ref("leaderboard/top50").set(leaderboardData),
-      rtdb.ref("cache/leaderboard/top50").set(leaderboardData)
+      rtdb.ref("cache/leaderboard/top50").set(leaderboardData),
+      rtdb.ref().update(rankUpdates),
     ]);
     
     // Update metadata
-    await rtdb.ref("cache/leaderboard/metadata").set({
+    const metadataRef = rtdb.ref("cache/leaderboard/metadata");
+    const existingMetaSnap = await metadataRef.once("value");
+    const existingMeta = existingMetaSnap.val() || {};
+
+    await metadataRef.set({
       lastUpdated: Date.now(),
-      version: (await rtdb.ref("cache/leaderboard/metadata").once('value')).val()?.version + 1 || 1,
-      count: index
+      version: (existingMeta.version || 0) + 1,
+      count: index,
     });
   } catch (error) {
     console.error("Error updating leaderboard cache:", error);
@@ -1037,6 +1062,16 @@ async function updateRecentActivityCache() {
  */
 async function updateActivityInCache(activityType, activityId, activityData) {
   try {
+    // CRITICAL: Only cache 'active' activities in indexed cache
+    // Inactive activities should not appear in pending missions
+    // Default to 'active' if status is missing (for new activities)
+    const status = activityData.status || 'active';
+    if (status !== 'active') {
+      // If activity is not active, remove it from indexed cache (if it exists)
+      await removeActivityFromCache(activityType, activityId);
+      return; // Don't add inactive activities to indexed cache
+    }
+    
     const points = activityData.totalPoints || activityData.points || 0;
     const date = activityData.createdAt?.toDate?.()?.toISOString().split('T')[0] || 
                  (activityData.createdAt ? new Date(activityData.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]);
@@ -1048,6 +1083,7 @@ async function updateActivityInCache(activityType, activityId, activityData) {
     const cacheData = {
       id: activityId,
       ...activityData,
+      status: 'active', // Ensure status is set
       questionsCount: activityData.questions?.length || activityData.questionsCount || 0,
       // For forms, ensure formFields array and counts are included
       formFieldsCount: activityData.formFields?.length || activityData.formFieldsCount || 0
@@ -1207,10 +1243,19 @@ async function getActivitiesFromIndexedCache() {
       rtdb.ref('cache/activities/forms/byId').once('value')
     ]);
     
+    // CRITICAL: Filter to only include 'active' activities
+    // This ensures inactive activities don't appear in pending missions
+    const filterActive = (activities) => {
+      return Object.values(activities || {}).filter(activity => {
+        const status = activity.status || 'inactive';
+        return status === 'active';
+      });
+    };
+    
     return {
-      quizzes: Object.values(quizzesSnap.val() || {}),
-      tasks: Object.values(tasksSnap.val() || {}),
-      forms: Object.values(formsSnap.val() || {})
+      quizzes: filterActive(quizzesSnap.val()),
+      tasks: filterActive(tasksSnap.val()),
+      forms: filterActive(formsSnap.val())
     };
   } catch (error) {
     console.error("Error getting activities from indexed cache:", error);
@@ -1238,13 +1283,24 @@ async function getCompletionStatusFromCache(userId) {
 /**
  * Pre-compute user activity lists (pending and completed)
  * This is the core function that creates pre-computed filtered views
+ * @param {string} userId - User ID
+ * @param {Array<string>} excludeActivityIds - Optional array of activity IDs to explicitly exclude (for deleted activities)
  */
-async function updateUserActivityLists(userId) {
+async function updateUserActivityLists(userId, excludeActivityIds = []) {
   try {
     
     // Fetch from indexed cache (not Firestore)
     const activities = await getActivitiesFromIndexedCache();
     const completion = await getCompletionStatusFromCache(userId);
+    
+    // CRITICAL: Explicitly filter out deleted activities
+    // This ensures that even if RTDB hasn't fully propagated the deletion,
+    // we won't include deleted tasks in the user's pending list
+    if (excludeActivityIds.length > 0) {
+      activities.quizzes = activities.quizzes.filter(q => !excludeActivityIds.includes(q.id));
+      activities.tasks = activities.tasks.filter(t => !excludeActivityIds.includes(t.id));
+      activities.forms = activities.forms.filter(f => !excludeActivityIds.includes(f.id));
+    }
     
     
     // PRE-COMPUTE: Pending activities
@@ -1403,23 +1459,27 @@ async function triggerUserActivityListUpdates(activityId = null, activityType = 
       });
     }
     
-    // Update in batches (non-blocking, don't wait for all)
-    const batchSize = 10;
-    for (let i = 0; i < userIds.length; i += batchSize) {
-      const batch = userIds.slice(i, i + batchSize);
-      // Fire and forget - don't block
-      Promise.all(
-        batch.map(uid => 
-          updateUserActivityLists(uid).catch(err => {
-            console.error(`Failed to update lists for ${uid}:`, err);
-          })
-        )
-      ).catch(() => {}); // Don't throw
-    }
+    // CRITICAL: If activityId is provided, explicitly exclude it from all user lists
+    // This ensures deleted activities are never included, even if RTDB hasn't fully propagated
+    const excludeIds = activityId ? [activityId] : [];
+    
+    // Update all users in parallel (not batches) - faster for smaller user bases
+    // For larger user bases, this will still work but may hit rate limits
+    await Promise.all(
+      userIds.map(uid => 
+        updateUserActivityLists(uid, excludeIds).catch(err => {
+          console.error(`Failed to update lists for ${uid}:`, err);
+          // Return null on error so Promise.all doesn't fail
+          return null;
+        })
+      )
+    );
+    
+    console.log(`Updated activity lists for ${userIds.length} users${excludeIds.length > 0 ? ` (excluded: ${excludeIds.join(', ')})` : ''}`);
     
   } catch (error) {
     console.error("Error triggering user activity list updates:", error);
-    // Non-critical, don't throw
+    // Don't throw - this is called from other functions and we don't want to break them
   }
 }
 
@@ -1927,22 +1987,26 @@ exports.onSubmissionCreate = onDocumentCreated(
       const submissionData = event.data.data();
       const { userId, taskId } = submissionData;
       
-      // Step 1: Update indexed submission cache
-      await updateSubmissionLists(event.params.submissionId, submissionData, 'create');
-      
-      // Step 2: Update user completion status (indexed) - MUST complete before updating lists
+      // CRITICAL: Update user activity list FIRST (fastest path to remove from pending)
+      // This ensures the card disappears from user's pending list as quickly as possible
       if (taskId) {
-        await updateUserCompletion(userId, 'task', taskId, {
-          completed: true,
-          status: 'pending',
-          submittedAt: submissionData.submittedAt?.toMillis?.() || 
-                       (submissionData.submittedAt ? new Date(submissionData.submittedAt).getTime() : Date.now())
-        });
-        // Note: updateUserCompletion already calls updateUserActivityLists internally
+        // Update completion status and activity list in parallel with submission cache
+        await Promise.all([
+          updateSubmissionLists(event.params.submissionId, submissionData, 'create'),
+          updateUserCompletion(userId, 'task', taskId, {
+            completed: true,
+            status: 'pending',
+            submittedAt: submissionData.submittedAt?.toMillis?.() || 
+                         (submissionData.submittedAt ? new Date(submissionData.submittedAt).getTime() : Date.now())
+          })
+          // Note: updateUserCompletion already calls updateUserActivityLists internally
+        ]);
+      } else {
+        await updateSubmissionLists(event.params.submissionId, submissionData, 'create');
       }
       
-      // Step 3: Update other caches in parallel
-      await Promise.all([
+      // Step 2: Update other caches in parallel (non-blocking for user experience)
+      Promise.all([
         // Update user stats
         updateUserStats(userId),
         // Update admin caches
@@ -1952,7 +2016,10 @@ exports.onSubmissionCreate = onDocumentCreated(
         // Update old caches (for backward compatibility)
         updateUserCompletionStatusCache(userId),
         taskId ? updateTasksCache() : Promise.resolve()
-      ]);
+      ]).catch(err => {
+        console.error('Error updating secondary caches:', err);
+        // Don't throw - user list is already updated
+      });
       
       return null;
     }
@@ -2152,26 +2219,26 @@ exports.onQuizSubmissionCreate = onDocumentCreated(
       const score = submissionData.score || submissionData.totalScore || 0;
       
       
-      // Step 1: Update indexed submission cache
-      await updateSubmissionLists(event.params.submissionId, {
-        ...submissionData,
-        quizId: quizId,
-        status: 'completed',
-        pointsAwarded: score
-      }, 'create');
-      
-      // Step 2: Update user completion status (indexed) - MUST complete before updating lists
-      await updateUserCompletion(userId, 'quiz', quizId, {
-        completed: true,
-        submittedAt: submittedAtTimestamp,
-        points: score,
-        score: score // Include both for consistency
-      });
-      // Note: updateUserCompletion already calls updateUserActivityLists internally
-      
-      
-      // Step 3: Update other caches in parallel
+      // CRITICAL: Update user activity list FIRST (fastest path to remove from pending)
+      // This ensures the card disappears from user's pending list as quickly as possible
       await Promise.all([
+        updateSubmissionLists(event.params.submissionId, {
+          ...submissionData,
+          quizId: quizId,
+          status: 'completed',
+          pointsAwarded: score
+        }, 'create'),
+        updateUserCompletion(userId, 'quiz', quizId, {
+          completed: true,
+          submittedAt: submittedAtTimestamp,
+          points: score,
+          score: score // Include both for consistency
+        })
+        // Note: updateUserCompletion already calls updateUserActivityLists internally
+      ]);
+      
+      // Step 2: Update other caches in parallel (non-blocking for user experience)
+      Promise.all([
         // Update user stats
         updateUserStats(userId),
         // Update admin caches
@@ -2180,7 +2247,10 @@ exports.onQuizSubmissionCreate = onDocumentCreated(
         // Update old caches (for backward compatibility)
         updateUserCompletionStatusCache(userId),
         updateUserStatsCache(userId)
-      ]);
+      ]).catch(err => {
+        console.error('Error updating secondary caches:', err);
+        // Don't throw - user list is already updated
+      });
       
       // Step 4: Create notification for quiz completion (separate to ensure it completes)
       try {
@@ -2282,17 +2352,20 @@ exports.onQuizCreate = onDocumentCreated(
     },
     async (event) => {
       const quizData = event.data.data();
+      const quizId = event.params.quizId;
       
+      // Step 1: Update all caches in parallel (no verification needed - RTDB writes are atomic)
       await Promise.all([
-        // 1. Update indexed structure
-        updateActivityInCache('quizzes', event.params.quizId, quizData),
-        // 2. Update old caches (for backward compatibility)
+        updateActivityInCache('quizzes', quizId, quizData),
         updateQuizzesCache(),
         updateAttendeeActivitiesCache(),
-        updateActivityMetadataCache(),
-        // 3. Trigger pre-compute updates for all users
-        triggerUserActivityListUpdates(event.params.quizId, 'quizzes')
+        updateActivityMetadataCache()
       ]);
+      
+      // Step 2: Trigger user list updates for all users in parallel
+      await triggerUserActivityListUpdates(null, 'quizzes');
+      
+      console.log(`Quiz ${quizId} created and user lists updated for all users`);
       return null;
     }
 );
@@ -2308,23 +2381,27 @@ exports.onQuizUpdate = onDocumentUpdated(
     async (event) => {
       const oldData = event.data.before.data();
       const newData = event.data.after.data();
+      const quizId = event.params.quizId;
       
-      const updates = [
-        // 1. Update indexed structure (incremental)
-        updateActivityInCache('quizzes', event.params.quizId, newData),
-        updateActivityIndexes('quizzes', event.params.quizId, oldData, newData),
-        // 2. Update old caches (for backward compatibility)
+      // Step 1: Update all caches in parallel
+      await Promise.all([
+        updateActivityInCache('quizzes', quizId, newData),
+        updateActivityIndexes('quizzes', quizId, oldData, newData),
         updateQuizzesCache(),
         updateAttendeeActivitiesCache(),
         updateActivityMetadataCache()
-      ];
+      ]);
       
-      // 3. Trigger pre-compute updates (only if status or points changed)
+      // Step 2: Trigger pre-compute updates if status or points changed
+      // This is critical - when status changes to 'active', users need to see it
+      // When status changes to 'inactive', users need it removed
       if (oldData.status !== newData.status || oldData.totalPoints !== newData.totalPoints) {
-        updates.push(triggerUserActivityListUpdates(event.params.quizId, 'quizzes'));
+        // If status changed to active, don't exclude (it's being added)
+        // If status changed to inactive, exclude it (it's being removed)
+        const excludeId = newData.status !== 'active' ? quizId : null;
+        await triggerUserActivityListUpdates(excludeId, 'quizzes');
       }
       
-      await Promise.all(updates);
       return null;
     }
 );
@@ -2338,16 +2415,50 @@ exports.onQuizDelete = onDocumentDeleted(
       region: region,
     },
     async (event) => {
+      const quizId = event.params.quizId;
+      
+      // Find all quiz submissions for this quiz so we can clean up
+      const submissionsSnapshot = await db.collection("quizSubmissions")
+        .where("quizId", "==", quizId)
+        .get();
+      
+      const affectedUserIds = new Set();
+      const batch = db.batch();
+      submissionsSnapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.userId) {
+          affectedUserIds.add(data.userId);
+        }
+        batch.delete(doc.ref);
+      });
+      if (!submissionsSnapshot.empty) {
+        await batch.commit();
+      }
+
+      // Step 1: Remove from indexed structure and update caches
       await Promise.all([
-        // 1. Remove from indexed structure
-        removeActivityFromCache('quizzes', event.params.quizId),
-        // 2. Update old caches (for backward compatibility)
+        removeActivityFromCache('quizzes', quizId),
         updateQuizzesCache(),
         updateAttendeeActivitiesCache(),
-        updateActivityMetadataCache(),
-        // 3. Trigger pre-compute updates for all users
-        triggerUserActivityListUpdates(event.params.quizId, 'quizzes')
+        updateActivityMetadataCache()
       ]);
+
+      // Step 2: Update user activity lists for affected users first (they had submissions)
+      // CRITICAL: Pass quizId to explicitly exclude it from the list
+      const affectedUserUpdates = Array.from(affectedUserIds).map(uid => 
+        Promise.all([
+          updateUserCompletionStatusCache(uid),
+          updateUserStatsCache(uid),
+          updateUserActivityLists(uid, [quizId]) // Explicitly exclude deleted quiz
+        ]).catch(err => {
+          console.error(`Failed to update user ${uid} after quiz deletion:`, err);
+        })
+      );
+      await Promise.all(affectedUserUpdates);
+
+      // Step 3: Trigger pre-compute updates for ALL users (to remove quiz from pending lists)
+      await triggerUserActivityListUpdates(quizId, 'quizzes');
+      
       return null;
     }
 );
@@ -2362,17 +2473,20 @@ exports.onTaskCreate = onDocumentCreated(
     },
     async (event) => {
       const taskData = event.data.data();
+      const taskId = event.params.taskId;
       
+      // Step 1: Update all caches in parallel (no verification needed - RTDB writes are atomic)
       await Promise.all([
-        // 1. Update indexed structure
-        updateActivityInCache('tasks', event.params.taskId, taskData),
-        // 2. Update old caches (for backward compatibility)
+        updateActivityInCache('tasks', taskId, taskData),
         updateTasksCache(),
         updateAttendeeActivitiesCache(),
-        updateActivityMetadataCache(),
-        // 3. Trigger pre-compute updates for all users
-        triggerUserActivityListUpdates(event.params.taskId, 'tasks')
+        updateActivityMetadataCache()
       ]);
+      
+      // Step 2: Trigger user list updates for all users in parallel
+      await triggerUserActivityListUpdates(null, 'tasks');
+      
+      console.log(`Task ${taskId} created and user lists updated for all users`);
       return null;
     }
 );
@@ -2388,23 +2502,27 @@ exports.onTaskUpdate = onDocumentUpdated(
     async (event) => {
       const oldData = event.data.before.data();
       const newData = event.data.after.data();
+      const taskId = event.params.taskId;
       
-      const updates = [
-        // 1. Update indexed structure (incremental)
-        updateActivityInCache('tasks', event.params.taskId, newData),
-        updateActivityIndexes('tasks', event.params.taskId, oldData, newData),
-        // 2. Update old caches (for backward compatibility)
+      // Step 1: Update all caches in parallel
+      await Promise.all([
+        updateActivityInCache('tasks', taskId, newData),
+        updateActivityIndexes('tasks', taskId, oldData, newData),
         updateTasksCache(),
         updateAttendeeActivitiesCache(),
         updateActivityMetadataCache()
-      ];
+      ]);
       
-      // 3. Trigger pre-compute updates (only if status or points changed)
+      // Step 2: Trigger pre-compute updates if status or points changed
+      // This is critical - when status changes to 'active', users need to see it
+      // When status changes to 'inactive', users need it removed
       if (oldData.status !== newData.status || oldData.points !== newData.points) {
-        updates.push(triggerUserActivityListUpdates(event.params.taskId, 'tasks'));
+        // If status changed to active, don't exclude (it's being added)
+        // If status changed to inactive, exclude it (it's being removed)
+        const excludeId = newData.status !== 'active' ? taskId : null;
+        await triggerUserActivityListUpdates(excludeId, 'tasks');
       }
       
-      await Promise.all(updates);
       return null;
     }
 );
@@ -2418,16 +2536,62 @@ exports.onTaskDelete = onDocumentDeleted(
       region: region,
     },
     async (event) => {
+      const taskId = event.params.taskId;
+      
+      // Delete all submissions for this task
+      const submissionsSnapshot = await db.collection("submissions")
+        .where("taskId", "==", taskId)
+        .get();
+      
+      const affectedUserIds = new Set();
+      if (!submissionsSnapshot.empty) {
+        const batch = db.batch();
+        submissionsSnapshot.forEach((doc) => {
+          const data = doc.data();
+          if (data.userId) {
+            affectedUserIds.add(data.userId);
+          }
+          batch.delete(doc.ref);
+        });
+        await batch.commit();
+      }
+
+      // Step 1: Remove from indexed structure and update caches
       await Promise.all([
-        // 1. Remove from indexed structure
-        removeActivityFromCache('tasks', event.params.taskId),
-        // 2. Update old caches (for backward compatibility)
+        removeActivityFromCache('tasks', taskId),
         updateTasksCache(),
         updateAttendeeActivitiesCache(),
-        updateActivityMetadataCache(),
-        // 3. Trigger pre-compute updates for all users
-        triggerUserActivityListUpdates(event.params.taskId, 'tasks')
+        updateActivityMetadataCache()
       ]);
+
+      // Verify the task is removed from indexed cache before updating user lists
+      const verifyRef = rtdb.ref(`cache/activities/tasks/byId/${taskId}`);
+      const verifySnap = await verifyRef.once('value');
+      if (verifySnap.exists()) {
+        console.warn(`Task ${taskId} still exists in indexed cache after removal attempt. Retrying...`);
+        // Retry removal
+        await removeActivityFromCache('tasks', taskId);
+      }
+
+      // Step 2: Update user activity lists for affected users first (they had submissions)
+      // CRITICAL: Pass taskId to explicitly exclude it from the list
+      const affectedUserUpdates = Array.from(affectedUserIds).map(uid => 
+        Promise.all([
+          updateUserCompletionStatusCache(uid),
+          updateUserStatsCache(uid),
+          updateUserActivityLists(uid, [taskId]) // Explicitly exclude deleted task
+        ]).catch(err => {
+          console.error(`Failed to update user ${uid} after task deletion:`, err);
+        })
+      );
+      await Promise.all(affectedUserUpdates);
+
+      // Step 3: Trigger pre-compute updates for ALL users (to remove task from pending lists)
+      // This is critical - even users without submissions need their pending lists updated
+      await triggerUserActivityListUpdates(taskId, 'tasks');
+      
+      console.log(`Task ${taskId} deleted and user lists updated for all users`);
+      
       return null;
     }
 );
@@ -2442,17 +2606,20 @@ exports.onFormCreate = onDocumentCreated(
     },
     async (event) => {
       const formData = event.data.data();
+      const formId = event.params.formId;
       
+      // Step 1: Update all caches in parallel (no verification needed - RTDB writes are atomic)
       await Promise.all([
-        // 1. Update indexed structure
-        updateActivityInCache('forms', event.params.formId, formData),
-        // 2. Update old caches (for backward compatibility)
+        updateActivityInCache('forms', formId, formData),
         updateFormsCache(),
         updateAttendeeActivitiesCache(),
-        updateActivityMetadataCache(),
-        // 3. Trigger pre-compute updates for all users
-        triggerUserActivityListUpdates(event.params.formId, 'forms')
+        updateActivityMetadataCache()
       ]);
+      
+      // Step 2: Trigger user list updates for all users in parallel
+      await triggerUserActivityListUpdates(null, 'forms');
+      
+      console.log(`Form ${formId} created and user lists updated for all users`);
       return null;
     }
 );
@@ -2468,23 +2635,27 @@ exports.onFormUpdate = onDocumentUpdated(
     async (event) => {
       const oldData = event.data.before.data();
       const newData = event.data.after.data();
+      const formId = event.params.formId;
       
-      const updates = [
-        // 1. Update indexed structure (incremental)
-        updateActivityInCache('forms', event.params.formId, newData),
-        updateActivityIndexes('forms', event.params.formId, oldData, newData),
-        // 2. Update old caches (for backward compatibility)
+      // Step 1: Update all caches in parallel
+      await Promise.all([
+        updateActivityInCache('forms', formId, newData),
+        updateActivityIndexes('forms', formId, oldData, newData),
         updateFormsCache(),
         updateAttendeeActivitiesCache(),
         updateActivityMetadataCache()
-      ];
+      ]);
       
-      // 3. Trigger pre-compute updates (only if status or points changed)
+      // Step 2: Trigger pre-compute updates if status or points changed
+      // This is critical - when status changes to 'active', users need to see it
+      // When status changes to 'inactive', users need it removed
       if (oldData.status !== newData.status || oldData.points !== newData.points) {
-        updates.push(triggerUserActivityListUpdates(event.params.formId, 'forms'));
+        // If status changed to active, don't exclude (it's being added)
+        // If status changed to inactive, exclude it (it's being removed)
+        const excludeId = newData.status !== 'active' ? formId : null;
+        await triggerUserActivityListUpdates(excludeId, 'forms');
       }
       
-      await Promise.all(updates);
       return null;
     }
 );
@@ -2498,16 +2669,50 @@ exports.onFormDelete = onDocumentDeleted(
       region: region,
     },
     async (event) => {
+      const formId = event.params.formId;
+      
+      // Delete all submissions for this form
+      const submissionsSnapshot = await db.collection("formSubmissions")
+        .where("formId", "==", formId)
+        .get();
+      
+      const affectedUserIds = new Set();
+      const batch = db.batch();
+      submissionsSnapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.userId) {
+          affectedUserIds.add(data.userId);
+        }
+        batch.delete(doc.ref);
+      });
+      if (!submissionsSnapshot.empty) {
+        await batch.commit();
+      }
+
+      // Step 1: Remove from indexed structure and update caches
       await Promise.all([
-        // 1. Remove from indexed structure
-        removeActivityFromCache('forms', event.params.formId),
-        // 2. Update old caches (for backward compatibility)
+        removeActivityFromCache('forms', formId),
         updateFormsCache(),
         updateAttendeeActivitiesCache(),
-        updateActivityMetadataCache(),
-        // 3. Trigger pre-compute updates for all users
-        triggerUserActivityListUpdates(event.params.formId, 'forms')
+        updateActivityMetadataCache()
       ]);
+
+      // Step 2: Update user activity lists for affected users first (they had submissions)
+      // CRITICAL: Pass formId to explicitly exclude it from the list
+      const affectedUserUpdates = Array.from(affectedUserIds).map(uid => 
+        Promise.all([
+          updateUserCompletionStatusCache(uid),
+          updateUserStatsCache(uid),
+          updateUserActivityLists(uid, [formId]) // Explicitly exclude deleted form
+        ]).catch(err => {
+          console.error(`Failed to update user ${uid} after form deletion:`, err);
+        })
+      );
+      await Promise.all(affectedUserUpdates);
+
+      // Step 3: Trigger pre-compute updates for ALL users (to remove form from pending lists)
+      await triggerUserActivityListUpdates(formId, 'forms');
+      
       return null;
     }
 );
@@ -2557,8 +2762,20 @@ async function updateUserNotificationCache(userId, notification) {
 exports.syncAdmins = onRequest(
     {
       region: region,
+      cors: true, // Enable CORS for browser access
     },
     async (req, res) => {
+      // Set CORS headers
+      res.set('Access-Control-Allow-Origin', '*');
+      res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.set('Access-Control-Allow-Headers', 'Content-Type');
+      
+      // Handle preflight
+      if (req.method === 'OPTIONS') {
+        res.status(204).send('');
+        return;
+      }
+      
       try {
         await syncAdminsToRTDB();
         res.status(200).send("Admins synced to RTDB successfully");
@@ -2566,6 +2783,31 @@ exports.syncAdmins = onRequest(
         console.error("Error syncing admins:", error);
         res.status(500).send("Error syncing admins: " + error.message);
       }
+    }
+);
+
+/**
+ * Callable function to sync admins to RTDB (more secure, requires auth)
+ * Can be called from admin panel
+ */
+exports.syncAdminsCallable = onCall(
+    {
+      region: region,
+    },
+    async (request) => {
+      // Only allow authenticated users
+      if (!request.auth) {
+        throw new Error("Unauthorized");
+      }
+      
+      // Check if user is admin
+      const adminDoc = await db.collection("admins").doc(request.auth.uid).get();
+      if (!adminDoc.exists) {
+        throw new Error("Unauthorized: Admin access required");
+      }
+      
+      await syncAdminsToRTDB();
+      return { success: true, message: "Admins synced to RTDB successfully" };
     }
 );
 

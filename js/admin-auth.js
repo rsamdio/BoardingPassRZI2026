@@ -76,9 +76,20 @@ const AdminAuth = {
                 ...userData
             };
             
+            // Sync admins to RTDB to ensure RTDB security rules work
+            // This is critical for adminCache access - must complete before app init
+            try {
+                await this.syncAdminsToRTDB();
+                console.log('Admins synced to RTDB successfully');
+            } catch (err) {
+                console.error('Failed to sync admins to RTDB:', err);
+                // Show warning but don't block login
+                Toast.warning('Admin sync failed. Some features may not work. Please refresh the page.');
+            }
+            
             this.hideLogin();
             
-            // Initialize admin app
+            // Initialize admin app (after sync completes)
             if (typeof AdminApp !== 'undefined') {
                 AdminApp.init();
             }
@@ -175,6 +186,53 @@ const AdminAuth = {
     logout() {
         if (confirm('Are you sure you want to logout?')) {
             this.signOut();
+        }
+    },
+    
+    /**
+     * Sync admins from Firestore to RTDB
+     * This ensures RTDB security rules can check admin status
+     */
+    async syncAdminsToRTDB() {
+        try {
+            // Try callable function first (more secure, requires auth)
+            const functions = firebase.functions();
+            const syncAdminsCallable = functions.httpsCallable('syncAdminsCallable');
+            
+            try {
+                const result = await syncAdminsCallable();
+                console.log('Admins synced to RTDB:', result.data.message);
+                return;
+            } catch (callableError) {
+                // If callable fails, try HTTP endpoint as fallback
+                console.log('Callable function failed, trying HTTP endpoint...', callableError);
+            }
+            
+            // Fallback: Use HTTP request to syncAdmins endpoint
+            const region = 'us-central1'; // Match functions/index.js
+            const projectId = firebase.app().options.projectId;
+            const url = `https://${region}-${projectId}.cloudfunctions.net/syncAdmins`;
+            
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+            
+            const result = await response.text();
+            console.log('Admins synced to RTDB:', result);
+        } catch (error) {
+            console.error('Error syncing admins to RTDB:', error);
+            // Don't throw - this is non-critical for login
+            // Cloud Functions should handle syncing on admin create/update/delete
+            // But we'll show a warning if it fails
+            Toast.warning('Admin sync to RTDB failed. Some features may not work. Please refresh the page.');
         }
     }
 };

@@ -6,6 +6,7 @@ const AdminTasks = {
     fieldCounter: 0,
     loading: false,
     draftAutoSaveInterval: null,
+    tasksListener: null, // Real-time listener for tasks cache
     currentTasks: {
         tasks: [],
         currentIndex: 0
@@ -63,6 +64,9 @@ const AdminTasks = {
             });
             
             this.render();
+            
+            // Setup real-time listener for tasks cache updates
+            this.setupRealtimeListener();
         } catch (error) {
             console.error('Error loading tasks:', error);
             Toast.error('Failed to load tasks');
@@ -70,6 +74,71 @@ const AdminTasks = {
         } finally {
             this.loading = false;
             AdminUI.setLoading('tasks', false);
+        }
+    },
+    
+    /**
+     * Setup real-time listener for tasks cache
+     * Automatically refreshes the list when tasks are created/updated/deleted
+     */
+    setupRealtimeListener() {
+        // Remove existing listener if any
+        if (this.tasksListener) {
+            DB.rtdb.ref('adminCache/tasks').off('value', this.tasksListener);
+            this.tasksListener = null;
+        }
+        
+        // Create new listener
+        this.tasksListener = (snapshot) => {
+            if (snapshot.exists()) {
+                const cacheData = snapshot.val();
+                const lastUpdated = cacheData.lastUpdated || 0;
+                
+                // Convert object to array, exclude lastUpdated
+                const tasks = Object.keys(cacheData)
+                    .filter(key => key !== 'lastUpdated')
+                    .map(key => {
+                        const task = cacheData[key];
+                        // Normalize timestamps
+                        if (task.updatedAt && typeof task.updatedAt !== 'number') {
+                            if (typeof task.updatedAt.toMillis === 'function') {
+                                task.updatedAt = task.updatedAt.toMillis();
+                            } else if (task.updatedAt.seconds !== undefined) {
+                                task.updatedAt = task.updatedAt.seconds * 1000 + (task.updatedAt.nanoseconds || 0) / 1000000;
+                            }
+                        }
+                        if (task.createdAt && typeof task.createdAt !== 'number') {
+                            if (typeof task.createdAt.toMillis === 'function') {
+                                task.createdAt = task.createdAt.toMillis();
+                            } else if (task.createdAt.seconds !== undefined) {
+                                task.createdAt = task.createdAt.seconds * 1000 + (task.createdAt.nanoseconds || 0) / 1000000;
+                            }
+                        }
+                        if (!task.updatedAt && !task.createdAt) {
+                            task.createdAt = 0;
+                        }
+                        return task;
+                    });
+                
+                // Update tasks and re-render (only if not currently loading)
+                if (!this.loading) {
+                    this.tasks = tasks;
+                    this.render();
+                }
+            }
+        };
+        
+        // Attach listener
+        DB.rtdb.ref('adminCache/tasks').on('value', this.tasksListener);
+    },
+    
+    /**
+     * Cleanup: Remove real-time listener
+     */
+    cleanup() {
+        if (this.tasksListener) {
+            DB.rtdb.ref('adminCache/tasks').off('value', this.tasksListener);
+            this.tasksListener = null;
         }
     },
     
@@ -134,7 +203,8 @@ const AdminTasks = {
         
         sortedTasks.forEach(task => {
             const card = document.createElement('div');
-            card.className = 'bg-white border border-slate-200 rounded-xl p-6 hover:shadow-md transition-shadow';
+            card.className = 'bg-white border border-slate-200 rounded-xl p-6 hover:shadow-md transition-all duration-300';
+            card.setAttribute('data-task-id', task.id);
             card.innerHTML = `
                 <div class="flex justify-between items-start mb-4">
                     <div>
@@ -686,7 +756,8 @@ const AdminTasks = {
                 description,
                 type: type || 'upload',
                 points,
-                status: status || 'inactive'
+                // Default to 'active' for new tasks, preserve existing status for updates
+                status: status || (taskId ? 'inactive' : 'active')
             };
             
             if (type === 'upload') {
@@ -742,18 +813,79 @@ const AdminTasks = {
             
             // Save to database
             let savedTaskId = taskId;
+            let operationId = null;
+            
             if (taskId) {
-                // Update: set updatedAt timestamp
+                // UPDATE: Optimistic update
+                const existingTask = this.tasks.find(t => t.id === taskId);
+                if (existingTask) {
+                    const updatedTask = {
+                        ...existingTask,
+                        ...data,
+                        id: taskId,
+                        updatedAt: Date.now() // Temporary timestamp, will be replaced by server
+                    };
+                    operationId = OptimisticUI.updateItem('task', taskId, updatedTask, () => {
+                        this.render();
+                    }, this.tasks);
+                }
+                
+                // Firestore update (async, don't wait)
                 data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
-                await DB.db.collection('tasks').doc(taskId).update(data);
-                Toast.success('Task updated successfully');
+                DB.db.collection('tasks').doc(taskId).update(data)
+                    .then(() => {
+                        Toast.success('Task updated successfully');
+                    })
+                    .catch((error) => {
+                        console.error('Error updating task:', error);
+                        Toast.error('Failed to update task: ' + error.message);
+                        // Rollback optimistic update on error
+                        if (operationId) {
+                            OptimisticUI.rollback(operationId, () => {
+                                this.render();
+                            });
+                        }
+                    });
             } else {
-                // Create: set both createdAt and updatedAt timestamps
+                // CREATE: Optimistic add
+                const newTask = {
+                    ...data,
+                    id: 'temp_' + Date.now(), // Temporary ID
+                    createdAt: Date.now(),
+                    updatedAt: Date.now()
+                };
+                operationId = OptimisticUI.addItem('task', newTask, () => {
+                    this.render();
+                }, this.tasks);
+                
+                // Firestore create (async, don't wait)
                 data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
                 data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
-                const docRef = await DB.db.collection('tasks').add(data);
-                savedTaskId = docRef.id;
-                Toast.success('Task created successfully');
+                DB.db.collection('tasks').add(data)
+                    .then((docRef) => {
+                        savedTaskId = docRef.id;
+                        Toast.success('Task created successfully');
+                        
+                        // Update the optimistic item with real ID
+                        const tempIndex = this.tasks.findIndex(t => t.id === newTask.id);
+                        if (tempIndex !== -1) {
+                            this.tasks[tempIndex] = {
+                                ...this.tasks[tempIndex],
+                                id: savedTaskId
+                            };
+                            this.render();
+                        }
+                    })
+                    .catch((error) => {
+                        console.error('Error creating task:', error);
+                        Toast.error('Failed to create task: ' + error.message);
+                        // Rollback optimistic update on error
+                        if (operationId) {
+                            OptimisticUI.rollback(operationId, () => {
+                                this.render();
+                            });
+                        }
+                    });
             }
             
             // Stop auto-save after successful save
@@ -761,37 +893,9 @@ const AdminTasks = {
             // Clear draft after successful save
             localStorage.removeItem('task_draft');
             
-            // Invalidate cache
-            DB.invalidateCache('task');
-            Cache.clear(Cache.keys.taskList());
-            
-            // Wait briefly for Cloud Function to update RTDB cache (usually <1 second)
-            // This allows the cache to be populated before we read from it
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            
-            // Use RTDB cache instead of Firestore (cost optimization)
-            // Cloud Function already updates the cache, so we can read from it
-            try {
-                this.tasks = await DB.getAllTasks();
-            } catch (error) {
-                // Fallback to Firestore if RTDB cache read fails
-                const snapshot = await DB.db.collection('tasks').get();
-                this.tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            }
-            
-            // Return to tasks view
-            // Temporarily set loading to true to prevent load() from overwriting our fresh data
-            const wasLoading = this.loading;
-            this.loading = true;
-            
+            // Return to tasks view immediately (optimistic UI already rendered)
             AdminUI.switchView('tasks');
-            // Render immediately with the fresh data we just fetched
-            this.render();
-            
-            // Reset loading state after a brief delay to allow render
-            setTimeout(() => {
-                this.loading = wasLoading;
-            }, 500);
+            // Real-time listener will confirm the update when Cloud Function completes
             
             this.currentStep = 1;
         } catch (error) {
@@ -1172,22 +1276,69 @@ const AdminTasks = {
             return;
         }
         
-        if (!confirm('Are you sure you want to delete this task? This action cannot be undone.')) {
+        // Enhanced confirmation dialog
+        const task = this.tasks.find(t => t.id === taskId);
+        const taskTitle = task?.title || 'this task';
+        
+        if (!confirm(`⚠️ Delete Task?\n\nTask: "${taskTitle}"\n\nThis will:\n• Delete the task permanently\n• Remove it from all users' pending missions\n• Delete all associated submissions\n\nThis action cannot be undone.`)) {
             return;
         }
         
         try {
-            await DB.db.collection('tasks').doc(taskId).delete();
-            Toast.success('Task deleted successfully');
-            DB.invalidateCache('task');
-            Cache.clear(Cache.keys.taskList());
+            // Show loading state
+            const taskCard = document.querySelector(`[data-task-id="${taskId}"]`);
+            if (taskCard) {
+                taskCard.style.opacity = '0.5';
+                taskCard.style.pointerEvents = 'none';
+                const deleteBtn = taskCard.querySelector('[onclick*="deleteTask"]');
+                if (deleteBtn) {
+                    deleteBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+                    deleteBtn.disabled = true;
+                }
+            }
             
-            // Force refresh from Firestore to see updated list immediately
-            const snapshot = await DB.db.collection('tasks').get();
-            this.tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            this.render();
+            // Optimistic UI update: Remove from local list immediately with fade-out
+            const operationId = OptimisticUI.removeItem('task', taskId, () => {
+                this.render();
+            }, this.tasks);
+            
+            // Delete from Firestore (async, triggers Cloud Function)
+            DB.db.collection('tasks').doc(taskId).delete()
+                .then(() => {
+                    // Clear caches
+                    DB.invalidateCache('task');
+                    Cache.clear(Cache.keys.taskList());
+                    
+                    // Show success message
+                    Toast.success(`Task "${taskTitle}" deleted successfully. It will be removed from all users' pending missions shortly.`);
+                    
+                    // Real-time listener will confirm the update when Cloud Function completes
+                })
+                .catch((error) => {
+                    console.error('Error deleting task:', error);
+                    Toast.error('Failed to delete task: ' + error.message);
+                    
+                    // Rollback optimistic update on error
+                    if (operationId) {
+                        OptimisticUI.rollback(operationId, () => {
+                            this.render();
+                        });
+                    }
+                    
+                    // Restore UI on error
+                    const taskCard = document.querySelector(`[data-task-id="${taskId}"]`);
+                    if (taskCard) {
+                        taskCard.style.opacity = '1';
+                        taskCard.style.pointerEvents = 'auto';
+                        const deleteBtn = taskCard.querySelector('[onclick*="deleteTask"]');
+                        if (deleteBtn) {
+                            deleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
+                            deleteBtn.disabled = false;
+                        }
+                    }
+                });
         } catch (error) {
-            console.error('Error deleting task:', error);
+            console.error('Error in deleteTask:', error);
             Toast.error('Failed to delete task: ' + error.message);
         }
     }

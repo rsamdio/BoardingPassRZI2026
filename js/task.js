@@ -126,39 +126,48 @@ const Task = {
                 status: 'pending'
             };
             
-            // Submit to database
-            await DB.submitTask(submission);
+            // IMMEDIATE UX: Show submitting state on card BEFORE database write
+            SubmissionHelpers.showSubmittingState(this.currentTask.id, 'task');
             
             // Update button text
             if (submitBtn) {
-                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Processing...';
+                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Submitting...';
+                submitBtn.disabled = true;
             }
             
-            // Mark as completed locally with status 'pending'
-            await CompletionManager.markCompletedLocally(
-                Auth.currentUser.uid,
-                'task',
-                this.currentTask.id,
-                {
-                    status: 'pending',
-                    submittedAt: Date.now()
-                }
-            );
-            
-            // Clear all related caches
-            CompletionManager.clearCompletionCaches(
+            // Optimistic update: Remove task from pending activities list immediately
+            await SubmissionHelpers.optimisticallyRemoveFromPending(
                 Auth.currentUser.uid,
                 'task',
                 this.currentTask.id
             );
             
-            // Close modal
+            // Close modal immediately (don't wait for database)
             closeModal('modal-upload');
             
-            // Refresh UI
-            await SubmissionHelpers.refreshUIAfterSubmission('task');
+            // Show success toast immediately
+            Toast.success('Submission successful! Waiting for approval.');
             
-            showToast('✓ Submission successful! Waiting for approval.', 'success');
+            // Submit to database (async - don't wait for Cloud Function)
+            DB.submitTask(submission)
+                .then(() => {
+                    // Mark as completed locally
+                    CompletionManager.markCompletedLocally(
+                        Auth.currentUser.uid,
+                        'task',
+                        this.currentTask.id,
+                        {
+                            status: 'pending',
+                            submittedAt: Date.now()
+                        }
+                    );
+                })
+                .catch(error => {
+                    console.error('Error submitting task:', error);
+                    Toast.error('Failed to submit task. Please try again.');
+                    // Rollback optimistic update on error
+                    SubmissionHelpers.rollbackSubmission(this.currentTask.id, 'task');
+                });
         } catch (error) {
             // Re-enable button on error
             if (submitBtn) {
@@ -286,37 +295,48 @@ const Task = {
                 status: 'pending'
             };
             
-            // Submit to database
-            await DB.submitTask(submission);
+            // IMMEDIATE UX: Show submitting state on card BEFORE database write
+            SubmissionHelpers.showSubmittingState(this.currentTask.id, 'task');
             
             // Update button text
             if (submitBtn) {
-                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Processing...';
+                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Submitting...';
+                submitBtn.disabled = true;
             }
             
-            // Mark as completed locally with status 'pending'
-            await CompletionManager.markCompletedLocally(
-                Auth.currentUser.uid,
-                'task',
-                this.currentTask.id,
-                {
-                    status: 'pending',
-                    submittedAt: Date.now()
-                }
-            );
-            
-            // Clear all related caches
-            CompletionManager.clearCompletionCaches(
+            // Optimistic update: Remove task from pending activities list immediately
+            await SubmissionHelpers.optimisticallyRemoveFromPending(
                 Auth.currentUser.uid,
                 'task',
                 this.currentTask.id
             );
             
-            // Close modal
+            // Close modal immediately (don't wait for database)
             closeModal('modal-task-form');
             
-            // Refresh UI
-            await SubmissionHelpers.refreshUIAfterSubmission('task');
+            // Show success toast immediately
+            Toast.success('Submission successful! Waiting for approval.');
+            
+            // Submit to database (async - don't wait for Cloud Function)
+            DB.submitTask(submission)
+                .then(() => {
+                    // Mark as completed locally
+                    CompletionManager.markCompletedLocally(
+                        Auth.currentUser.uid,
+                        'task',
+                        this.currentTask.id,
+                        {
+                            status: 'pending',
+                            submittedAt: Date.now()
+                        }
+                    );
+                })
+                .catch(error => {
+                    console.error('Error submitting task:', error);
+                    Toast.error('Failed to submit task. Please try again.');
+                    // Rollback optimistic update on error
+                    SubmissionHelpers.rollbackSubmission(this.currentTask.id, 'task');
+                });
             
             showToast('✓ Form submitted successfully! Your submission is pending review.', 'success');
         } catch (error) {

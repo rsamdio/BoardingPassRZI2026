@@ -18,6 +18,22 @@ const AdminApp = {
         }
         
         try {
+            // Verify admin exists in RTDB (required for adminCache access)
+            // If not found, trigger sync
+            const adminUid = AdminAuth.currentAdmin.uid;
+            const adminRef = DB.rtdb.ref(`admins/${adminUid}`);
+            const adminSnap = await adminRef.once('value');
+            
+            if (!adminSnap.exists()) {
+                console.log('Admin not found in RTDB, syncing...');
+                try {
+                    await AdminAuth.syncAdminsToRTDB();
+                } catch (syncError) {
+                    console.error('Failed to sync admins on init:', syncError);
+                    // Continue anyway - might work if Cloud Functions have synced
+                }
+            }
+            
             // Set admin name and photo
             const adminNameEl = document.getElementById('admin-name');
             const adminPhotoEl = document.getElementById('admin-photo');

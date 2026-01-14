@@ -8,6 +8,7 @@ const AdminQuizzes = {
     currentStep: 1,
     draftAutoSaveInterval: null,
     templates: [],
+    quizzesListener: null, // Real-time listener for quizzes cache
     
     /**
      * Load quizzes
@@ -20,18 +21,104 @@ const AdminQuizzes = {
         
         try {
             this.loading = true;
+            AdminUI.setLoading('quizzes', true);
+            AdminUI.showSkeleton('quizzes-list', 'list');
+            
             // Use getAllQuizzes for admin (includes inactive, uses RTDB cache)
             this.quizzes = await DB.getAllQuizzes();
             await this.loadTemplates();
+            
+            // Ensure quizzes have timestamps for sorting
+            this.quizzes = this.quizzes.map(quiz => {
+                if (quiz.updatedAt && typeof quiz.updatedAt !== 'number') {
+                    if (typeof quiz.updatedAt.toMillis === 'function') {
+                        quiz.updatedAt = quiz.updatedAt.toMillis();
+                    } else if (quiz.updatedAt.seconds !== undefined) {
+                        quiz.updatedAt = quiz.updatedAt.seconds * 1000 + (quiz.updatedAt.nanoseconds || 0) / 1000000;
+                    }
+                }
+                if (quiz.createdAt && typeof quiz.createdAt !== 'number') {
+                    if (typeof quiz.createdAt.toMillis === 'function') {
+                        quiz.createdAt = quiz.createdAt.toMillis();
+                    } else if (quiz.createdAt.seconds !== undefined) {
+                        quiz.createdAt = quiz.createdAt.seconds * 1000 + (quiz.createdAt.nanoseconds || 0) / 1000000;
+                    }
+                }
+                if (!quiz.updatedAt && !quiz.createdAt) {
+                    quiz.createdAt = 0;
+                }
+                return quiz;
+            });
+            
             if (!skipRender) {
                 this.render();
             }
+            
+            // Setup real-time listener for quizzes cache updates
+            this.setupRealtimeListener();
         } catch (error) {
             console.error('Error loading quizzes:', error);
             Toast.error('Failed to load quizzes');
             this.quizzes = [];
         } finally {
             this.loading = false;
+            AdminUI.setLoading('quizzes', false);
+        }
+    },
+    
+    /**
+     * Setup real-time listener for quizzes cache
+     * Automatically refreshes the list when quizzes are created/updated/deleted
+     */
+    setupRealtimeListener() {
+        // Remove existing listener if any
+        if (this.quizzesListener) {
+            DB.rtdb.ref('adminCache/quizzes').off('value', this.quizzesListener);
+            this.quizzesListener = null;
+        }
+        
+        // Create new listener
+        this.quizzesListener = (snapshot) => {
+            if (snapshot.exists()) {
+                const cacheData = snapshot.val();
+                const lastUpdated = cacheData.lastUpdated || 0;
+                
+                // Convert object to array, exclude lastUpdated
+                const quizzes = Object.keys(cacheData)
+                    .filter(key => key !== 'lastUpdated')
+                    .map(key => {
+                        const quiz = cacheData[key];
+                        return {
+                            ...quiz,
+                            id: key,
+                            questionsCount: quiz.questionsCount || 0
+                        };
+                    });
+                
+                // Sort by updatedAt or createdAt (newest first)
+                quizzes.sort((a, b) => {
+                    const aTime = a.updatedAt || a.createdAt || 0;
+                    const bTime = b.updatedAt || b.createdAt || 0;
+                    return bTime - aTime;
+                });
+                
+                // Update local state and render
+                this.quizzes = quizzes;
+                this.render();
+            }
+        };
+        
+        // Attach listener
+        DB.rtdb.ref('adminCache/quizzes').on('value', this.quizzesListener);
+    },
+    
+    /**
+     * Cleanup: Remove real-time listener
+     */
+    cleanup() {
+        if (this.quizzesListener) {
+            DB.rtdb.ref('adminCache/quizzes').off('value', this.quizzesListener);
+            this.quizzesListener = null;
         }
     },
     
@@ -167,7 +254,8 @@ const AdminQuizzes = {
         
         sortedQuizzes.forEach(quiz => {
             const card = document.createElement('div');
-            card.className = 'bg-white border border-slate-200 rounded-xl p-6 hover:shadow-md transition-shadow';
+            card.className = 'bg-white border border-slate-200 rounded-xl p-6 hover:shadow-md transition-all duration-300';
+            card.setAttribute('data-quiz-id', quiz.id);
             card.innerHTML = `
                 <div class="flex justify-between items-start mb-4">
                     <div>
@@ -840,62 +928,91 @@ const AdminQuizzes = {
             
             // Save to database
             let savedQuizId = quizId;
+            let operationId = null;
+            
             if (quizId) {
-                // Update: set updatedAt timestamp
+                // UPDATE: Optimistic update
+                const existingQuiz = this.quizzes.find(q => q.id === quizId);
+                if (existingQuiz) {
+                    const updatedQuiz = {
+                        ...existingQuiz,
+                        ...data,
+                        id: quizId,
+                        questionsCount: data.questions?.length || 0,
+                        updatedAt: Date.now() // Temporary timestamp
+                    };
+                    operationId = OptimisticUI.updateItem('quiz', quizId, updatedQuiz, () => {
+                        this.render();
+                    }, this.quizzes);
+                }
+                
+                // Firestore update (async, don't wait)
                 data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
-                await DB.db.collection('quizzes').doc(quizId).update(data);
-                Toast.success('Quiz updated successfully');
+                DB.db.collection('quizzes').doc(quizId).update(data)
+                    .then(() => {
+                        Toast.success('Quiz updated successfully');
+                    })
+                    .catch((error) => {
+                        console.error('Error updating quiz:', error);
+                        Toast.error('Failed to update quiz: ' + error.message);
+                        // Rollback optimistic update on error
+                        if (operationId) {
+                            OptimisticUI.rollback(operationId, () => {
+                                this.render();
+                            });
+                        }
+                    });
             } else {
-                // Create: set both createdAt and updatedAt timestamps
+                // CREATE: Optimistic add
+                const newQuiz = {
+                    ...data,
+                    id: 'temp_' + Date.now(), // Temporary ID
+                    questionsCount: data.questions?.length || 0,
+                    createdAt: Date.now(),
+                    updatedAt: Date.now()
+                };
+                operationId = OptimisticUI.addItem('quiz', newQuiz, () => {
+                    this.render();
+                }, this.quizzes);
+                
+                // Firestore create (async, don't wait)
                 data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
                 data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
-                const docRef = await DB.db.collection('quizzes').add(data);
-                savedQuizId = docRef.id;
-                Toast.success('Quiz created successfully');
+                DB.db.collection('quizzes').add(data)
+                    .then((docRef) => {
+                        savedQuizId = docRef.id;
+                        Toast.success('Quiz created successfully');
+                        
+                        // Update the optimistic item with real ID
+                        const tempIndex = this.quizzes.findIndex(q => q.id === newQuiz.id);
+                        if (tempIndex !== -1) {
+                            this.quizzes[tempIndex] = {
+                                ...this.quizzes[tempIndex],
+                                id: savedQuizId
+                            };
+                            this.render();
+                        }
+                    })
+                    .catch((error) => {
+                        console.error('Error creating quiz:', error);
+                        Toast.error('Failed to create quiz: ' + error.message);
+                        // Rollback optimistic update on error
+                        if (operationId) {
+                            OptimisticUI.rollback(operationId, () => {
+                                this.render();
+                            });
+                        }
+                    });
             }
-            
-            // Invalidate cache to ensure it shows up immediately
-            DB.invalidateCache('quiz');
-            Cache.clear(Cache.keys.quizList()); // Clear quiz list cache specifically
             
             // Stop auto-save after successful save
             this.stopAutoSave();
             // Clear draft after successful save
             localStorage.removeItem('quiz_draft');
             
-            // Wait briefly for Cloud Function to update RTDB cache (usually <1 second)
-            // This allows the cache to be populated before we read from it
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            
-            // Use RTDB cache instead of Firestore (cost optimization)
-            // Cloud Function already updates the cache, so we can read from it
-            try {
-                this.quizzes = await DB.getAllQuizzes();
-                // Ensure questionsCount is available for rendering
-                this.quizzes = this.quizzes.map(quiz => ({
-                    ...quiz,
-                    questionsCount: quiz.questionsCount || quiz.questions?.length || 0
-                }));
-            } catch (error) {
-                // Fallback to Firestore if RTDB cache read fails
-                const snapshot = await DB.db.collection('quizzes').get();
-                this.quizzes = snapshot.docs.map(doc => {
-                    const data = doc.data();
-                    return { 
-                        id: doc.id, 
-                        ...data,
-                        questionsCount: data.questions?.length || 0
-                    };
-                });
-            }
-            
-            // Return to quizzes view
-            // Temporarily set loading to true to prevent load() from overwriting our fresh data
-            const wasLoading = this.loading;
-            this.loading = true;
-            
-            // Switch view (this will trigger loadViewData which calls load(), but we'll skip it)
+            // Return to quizzes view immediately (optimistic UI already rendered)
             AdminUI.switchView('quizzes');
+            // Real-time listener will confirm the update when Cloud Function completes
             
             // Render immediately with the fresh data we just fetched
             this.render();
@@ -1339,17 +1456,69 @@ const AdminQuizzes = {
             return;
         }
         
-        if (!confirm('Are you sure you want to delete this quiz? This action cannot be undone.')) {
+        // Enhanced confirmation dialog
+        const quiz = this.quizzes.find(q => q.id === quizId);
+        const quizTitle = quiz?.title || 'this quiz';
+        
+        if (!confirm(`⚠️ Delete Quiz?\n\nQuiz: "${quizTitle}"\n\nThis will:\n• Delete the quiz permanently\n• Remove it from all users' pending missions\n• Delete all associated submissions\n\nThis action cannot be undone.`)) {
             return;
         }
         
         try {
-            await DB.db.collection('quizzes').doc(quizId).delete();
-            Toast.success('Quiz deleted successfully');
-            DB.invalidateCache('quiz');
-            await this.load();
+            // Show loading state
+            const quizCard = document.querySelector(`[data-quiz-id="${quizId}"]`);
+            if (quizCard) {
+                quizCard.style.opacity = '0.5';
+                quizCard.style.pointerEvents = 'none';
+                const deleteBtn = quizCard.querySelector('[onclick*="deleteQuiz"]');
+                if (deleteBtn) {
+                    deleteBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+                    deleteBtn.disabled = true;
+                }
+            }
+            
+            // Optimistic UI update: Remove from local list immediately with fade-out
+            const operationId = OptimisticUI.removeItem('quiz', quizId, () => {
+                this.render();
+            }, this.quizzes);
+            
+            // Delete from Firestore (async, triggers Cloud Function)
+            DB.db.collection('quizzes').doc(quizId).delete()
+                .then(() => {
+                    // Clear caches
+                    DB.invalidateCache('quiz');
+                    Cache.clear(Cache.keys.quizList());
+                    
+                    // Show success message
+                    Toast.success(`Quiz "${quizTitle}" deleted successfully. It will be removed from all users' pending missions shortly.`);
+                    
+                    // Real-time listener will confirm the update when Cloud Function completes
+                })
+                .catch((error) => {
+                    console.error('Error deleting quiz:', error);
+                    Toast.error('Failed to delete quiz: ' + error.message);
+                    
+                    // Rollback optimistic update on error
+                    if (operationId) {
+                        OptimisticUI.rollback(operationId, () => {
+                            this.render();
+                        });
+                    }
+                    
+                    // Restore UI on error
+                    const quizCard = document.querySelector(`[data-quiz-id="${quizId}"]`);
+                    if (quizCard) {
+                        quizCard.style.opacity = '1';
+                        quizCard.style.pointerEvents = 'auto';
+                        const deleteBtn = quizCard.querySelector('[onclick*="deleteQuiz"]');
+                        if (deleteBtn) {
+                            deleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
+                            deleteBtn.disabled = false;
+                        }
+                    }
+                });
         } catch (error) {
-            console.error('Error deleting quiz:', error);
+            console.error('Error in deleteQuiz:', error);
             Toast.error('Failed to delete quiz: ' + error.message);
         }
     }

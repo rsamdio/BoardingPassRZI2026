@@ -78,7 +78,32 @@ const Auth = {
             displayName: user.displayName || userData?.displayName || userData?.name,
             photoURL: user.photoURL || userData?.photoURL || userData?.photo // Use photoURL (fallback to photo for backward compatibility)
         };
-        
+
+        // Clear cached activity lists on each login so deleted/updated items
+        // are not served from stale localStorage
+        try {
+            if (typeof CompletionManager !== 'undefined') {
+                CompletionManager.clearCompletionCaches(user.uid, 'quiz');
+                CompletionManager.clearCompletionCaches(user.uid, 'task');
+                CompletionManager.clearCompletionCaches(user.uid, 'form');
+            } else {
+                // Fallback: clear known cache keys directly
+                const baseKeys = [
+                    `rtdb_cache_cache_users_${user.uid}_pendingActivities_combined`,
+                    `rtdb_cache_cache_users_${user.uid}_completedActivities_combined`,
+                    `rtdb_cache_cache_users_${user.uid}_completions`,
+                    `rtdb_cache_cache_users_${user.uid}_stats`,
+                    `pending_activities_version_${user.uid}`,
+                    `completed_activities_version_${user.uid}`
+                ];
+                baseKeys.forEach(key => {
+                    try { Cache.clear(key); } catch (e) {}
+                });
+            }
+        } catch (e) {
+            // Non-critical: if cache clear fails, RTDB cache will still correct it over time
+        }
+
         // Initialize dashboard immediately - don't wait for update
         App.initializeDashboard();
         

@@ -47,19 +47,14 @@ const SubmissionHelpers = {
      */
     async optimisticallyRemoveFromPending(userId, activityType, activityId) {
         try {
+            // First, smoothly remove from UI
+            this.optimisticallyRemoveFromUI(activityId, activityType);
+            
             const pending = await DB.getPendingActivities(userId) || [];
             const updatedPending = pending.filter(item => {
+                const itemId = item.id || item.taskId || item.quizId || item.formId;
                 // Remove if it matches the activity
-                if (activityType === 'quiz' && item.itemType === 'quiz' && item.id === activityId) {
-                    return false;
-                }
-                if (activityType === 'task' && item.itemType === 'task' && item.id === activityId) {
-                    return false;
-                }
-                if (activityType === 'form' && item.itemType === 'form' && item.id === activityId) {
-                    return false;
-                }
-                return true;
+                return itemId !== activityId;
             });
             
             // Update localStorage cache immediately
@@ -71,8 +66,124 @@ const SubmissionHelpers = {
             
             return true;
         } catch (error) {
+            console.error('Error in optimistic update:', error);
             return false;
         }
+    },
+    
+    /**
+     * Show submitting state on card - IMMEDIATE visual feedback
+     * @param {string} activityId - Activity ID
+     * @param {string} activityType - Activity type
+     */
+    showSubmittingState(activityId, activityType) {
+        const listEl = document.getElementById('home-task-list');
+        if (!listEl) return;
+        
+        const card = listEl.querySelector(`[data-activity-id="${activityId}"]`);
+        if (!card) return;
+        
+        // Add submitting state class
+        card.classList.add('submitting-state');
+        card.style.opacity = '0.7';
+        card.style.pointerEvents = 'none';
+        
+        // Find the action button and update it
+        const actionBtn = card.querySelector('.action-button, button');
+        if (actionBtn) {
+            const originalHTML = actionBtn.innerHTML;
+            actionBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Submitting...';
+            actionBtn.disabled = true;
+            actionBtn.dataset.originalHTML = originalHTML;
+        }
+        
+        // After 500ms, show success state, then fade out
+        setTimeout(() => {
+            card.classList.remove('submitting-state');
+            card.classList.add('success-state');
+            
+            // Show success checkmark
+            if (actionBtn) {
+                actionBtn.innerHTML = '<i class="fas fa-check mr-2"></i>Submitted!';
+                actionBtn.classList.add('bg-green-500');
+            }
+            
+            // Then fade out after showing success
+            setTimeout(() => {
+                this.optimisticallyRemoveFromUI(activityId, activityType);
+            }, 800); // Show success for 800ms before fading out
+        }, 500); // Show submitting state for 500ms
+    },
+    
+    /**
+     * Rollback submission on error
+     * @param {string} activityId - Activity ID
+     * @param {string} activityType - Activity type
+     */
+    rollbackSubmission(activityId, activityType) {
+        const listEl = document.getElementById('home-task-list');
+        if (!listEl) return;
+        
+        const card = listEl.querySelector(`[data-activity-id="${activityId}"]`);
+        if (!card) return;
+        
+        // Remove submitting/success states
+        card.classList.remove('submitting-state', 'success-state');
+        card.style.opacity = '1';
+        card.style.pointerEvents = 'auto';
+        
+        // Restore button
+        const actionBtn = card.querySelector('.action-button, button');
+        if (actionBtn && actionBtn.dataset.originalHTML) {
+            actionBtn.innerHTML = actionBtn.dataset.originalHTML;
+            actionBtn.disabled = false;
+            actionBtn.classList.remove('bg-green-500');
+        }
+        
+        // Clear optimistic cache
+        const userId = Auth.currentUser?.uid;
+        if (userId) {
+            const cacheKey = `rtdb_cache_cache_users_${userId}_pendingActivities_combined`;
+            Cache.clear(cacheKey);
+            // Re-render to restore the card
+            UI.renderPendingActivities();
+        }
+    },
+    
+    /**
+     * Optimistically remove activity from UI with smooth animation
+     * @param {string} activityId - Activity ID
+     * @param {string} activityType - Activity type
+     */
+    optimisticallyRemoveFromUI(activityId, activityType) {
+        const listEl = document.getElementById('home-task-list');
+        if (!listEl) return;
+        
+        // Find the card element
+        const card = listEl.querySelector(`[data-activity-id="${activityId}"]`);
+        if (!card) return;
+        
+        // Add fade-out animation
+        card.classList.add('fade-out-slide-down');
+        card.style.pointerEvents = 'none';
+        
+        // Remove after animation completes
+        setTimeout(() => {
+            card.remove();
+            
+            // If list is now empty, show empty state
+            if (listEl.children.length === 0) {
+                listEl.innerHTML = `
+                    <div class="p-8 text-center flex flex-col items-center animate-fade-in">
+                        <div class="w-12 h-12 bg-green-100 text-green-500 rounded-full flex items-center justify-center mb-3">
+                            <i class="fas fa-check text-xl"></i>
+                        </div>
+                        <p class="text-slate-800 font-bold">All caught up!</p>
+                        <p class="text-xs text-slate-500 mt-1">You've completed all pending missions.</p>
+                    </div>
+                `;
+            }
+        }, 300); // Match animation duration
     },
     
     /**

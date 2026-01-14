@@ -192,17 +192,13 @@ const Quiz = {
                 completedAt: submittedAt // Keep for backward compatibility
             };
             
-            // Update button text
-            if (submitBtn) {
-                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Processing...';
-            }
-            
-            // Submit to database first
-            await DB.submitQuiz(submission);
+            // IMMEDIATE UX: Show submitting state on card BEFORE database write
+            SubmissionHelpers.showSubmittingState(this.currentQuiz.id, 'quiz');
             
             // Update button text
             if (submitBtn) {
-                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Updating...';
+                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Submitting...';
+                submitBtn.disabled = true;
             }
             
             // Optimistic update: Remove quiz from pending activities list immediately
@@ -212,59 +208,54 @@ const Quiz = {
                 this.currentQuiz.id
             );
             
-            // Award points only if score > 0
-            if (totalScore > 0) {
-                try {
-                    const updatedUser = await DB.addPoints(Auth.currentUser.uid, totalScore, `Quiz: ${this.currentQuiz.title}`);
-                    // Update local user
-                    Auth.currentUser = { ...Auth.currentUser, ...updatedUser };
-                } catch (error) {
-                    console.error('Error awarding points:', error);
-                    // Don't block quiz submission if points fail
-                    Toast.error('Quiz submitted but failed to award points: ' + error.message);
-                }
-            } else {
-                // When score is 0, no points are awarded, so no user update needed
-                // When score > 0, addPoints() already updates Auth.currentUser
-                // If user data refresh is needed, use RTDB cache:
-                // const userStats = await DB.getUserStats(Auth.currentUser.uid);
-                // Auth.currentUser = { ...Auth.currentUser, points: userStats.totalPoints };
-                // This saves 1 Firestore read per quiz submission with 0 points
-            }
+            // Close modal immediately (don't wait for database)
+            closeModal('modal-quiz');
             
-            // Mark as completed in local cache IMMEDIATELY
-            // Use the same timestamp format as Cloud Function will use
-            await CompletionManager.markCompletedLocally(
-                Auth.currentUser.uid,
-                'quiz',
-                this.currentQuiz.id,
-                {
-                    submittedAt: submittedAtTimestamp,
-                    points: totalScore,
-                    score: totalScore
-                }
-            );
-            
-            // Clear all related caches to force refresh from RTDB
-            CompletionManager.clearCompletionCaches(
-                Auth.currentUser.uid,
-                'quiz',
-                this.currentQuiz.id
-            );
-            
-            // Also clear pending activities cache to force immediate refresh
-            SubmissionHelpers.clearActivityCaches(Auth.currentUser.uid, 'quiz', this.currentQuiz.id);
-            
-            // Show results
+            // Show results immediately
             this.showResults(totalScore, this.currentQuiz.totalPoints);
             
-            // Close modal and refresh UI after showing results
-            setTimeout(() => {
-                closeModal('modal-quiz');
-                // Force immediate UI refresh
-                UI.renderPendingActivities().catch(console.error);
-                UI.renderQuizzes().catch(console.error);
-            }, 2000);
+            // Show success toast
+            Toast.success(`Quiz submitted! Score: ${totalScore}/${this.currentQuiz.totalPoints}`);
+            
+            // Submit to database (async - don't wait for Cloud Function)
+            DB.submitQuiz(submission)
+                .then(() => {
+                    // Mark as completed locally
+                    CompletionManager.markCompletedLocally(
+                        Auth.currentUser.uid,
+                        'quiz',
+                        this.currentQuiz.id,
+                        {
+                            submittedAt: submittedAtTimestamp,
+                            points: totalScore,
+                            score: totalScore
+                        }
+                    );
+                    
+                    // Award points only if score > 0 (async)
+                    if (totalScore > 0) {
+                        DB.addPoints(Auth.currentUser.uid, totalScore, `Quiz: ${this.currentQuiz.title}`)
+                            .then(updatedUser => {
+                                // Update local user
+                                if (updatedUser) {
+                                    Auth.currentUser = { ...Auth.currentUser, ...updatedUser };
+                                }
+                            })
+                            .catch(error => {
+                                console.error('Error awarding points:', error);
+                                // Don't block quiz submission if points fail
+                            });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error submitting quiz:', error);
+                    Toast.error('Failed to submit quiz. Please try again.');
+                    // Rollback optimistic update on error
+                    SubmissionHelpers.rollbackSubmission(this.currentQuiz.id, 'quiz');
+                });
+            
+            // Results are shown immediately, modal closed immediately
+            // Real-time listener will confirm the update
         } catch (error) {
             // Re-enable button and inputs on error
             if (submitBtn) {

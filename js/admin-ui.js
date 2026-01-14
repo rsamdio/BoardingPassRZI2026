@@ -28,9 +28,18 @@ const AdminUI = {
         }
         
         try {
-            // Cleanup listeners for previous view if it was submissions
+            // Cleanup listeners for previous view
             if (this.currentView === 'submissions' && typeof AdminSubmissions !== 'undefined') {
                 AdminSubmissions.cleanupListeners();
+            }
+            if (this.currentView === 'tasks' && typeof AdminTasks !== 'undefined') {
+                AdminTasks.cleanup();
+            }
+            if (this.currentView === 'quizzes' && typeof AdminQuizzes !== 'undefined') {
+                AdminQuizzes.cleanup();
+            }
+            if (this.currentView === 'forms' && typeof AdminForms !== 'undefined') {
+                AdminForms.cleanup();
             }
             
             // Hide all views

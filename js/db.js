@@ -69,8 +69,17 @@ const DB = {
         const fullPath = path.startsWith('cache/') ? path : `cache/${path}`;
         const storageKey = cacheKey || `rtdb_cache_${fullPath.replace(/\//g, '_')}`;
         
+        // Some paths are highly dynamic and tightly coupled to Cloud Function
+        // pre-computations. For these we deliberately avoid localStorage so
+        // attendees always see the latest RTDB state.
+        const isHighlyDynamicPath =
+            fullPath.includes('/pendingActivities/') ||
+            fullPath.includes('/completedActivities/') ||
+            fullPath.includes('/completions/') ||
+            fullPath.includes('/stats/');
+        
         // Layer 1: Check localStorage
-        if (useLocalStorage) {
+        if (useLocalStorage && !isHighlyDynamicPath) {
             const cached = Cache.get(storageKey);
             if (cached && cached.data && cached.timestamp) {
                 const age = Date.now() - cached.timestamp;
@@ -94,8 +103,8 @@ const DB = {
             if (snapshot.exists()) {
                 const data = snapshot.val();
                 
-                // Cache in localStorage for next time
-                if (useLocalStorage) {
+                // Cache in localStorage for next time (except for highly dynamic paths)
+                if (useLocalStorage && !isHighlyDynamicPath) {
                     Cache.set(storageKey, {
                         data: data,
                         timestamp: Date.now()
@@ -138,7 +147,14 @@ const DB = {
      * Get pending activities (pre-computed, no filtering!)
      */
     async getPendingActivities(userId) {
-        const result = await this.readFromCache(`users/${userId}/pendingActivities/combined`);
+        // For correctness, always read from RTDB for pending activities.
+        // We intentionally bypass localStorage here so that when admins
+        // create/delete/update activities, users don't keep seeing stale
+        // items from a 30-minute local cache.
+        const result = await this.readFromCache(`users/${userId}/pendingActivities/combined`, {
+            useLocalStorage: false,
+            ttl: 0
+        });
         return result.data || [];
     },
     
@@ -801,8 +817,22 @@ const DB = {
             return result.data.rank;
         }
         
-        // Return default rank - no Firestore fallback
-        return 1;
+        // Fallback: derive rank from leaderboard cache if dedicated rank is missing
+        try {
+            const leaderboard = await this.getLeaderboard(50, useCache);
+            if (Array.isArray(leaderboard) && leaderboard.length > 0) {
+                const index = leaderboard.findIndex((entry) => entry && entry.uid === uid);
+                if (index !== -1) {
+                    return index + 1;
+                }
+            }
+        } catch (e) {
+            // Non-critical – ignore and fall through to default
+        }
+        
+        // No rank information available in cache
+        // Return null so callers can display a placeholder instead of an incorrect rank
+        return null;
     },
     
     // Get leaderboard from RTDB cache (indexed)
