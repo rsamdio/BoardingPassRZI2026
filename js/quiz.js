@@ -222,16 +222,16 @@ const Quiz = {
                 .then(() => {
                     // Mark as completed locally
                     CompletionManager.markCompletedLocally(
-                        Auth.currentUser.uid,
-                        'quiz',
-                        this.currentQuiz.id,
-                        {
-                            submittedAt: submittedAtTimestamp,
-                            points: totalScore,
-                            score: totalScore
-                        }
-                    );
-                    
+                Auth.currentUser.uid,
+                'quiz',
+                this.currentQuiz.id,
+                {
+                    submittedAt: submittedAtTimestamp,
+                    points: totalScore,
+                    score: totalScore
+                }
+            );
+            
                     // Award points only if score > 0 (async)
                     if (totalScore > 0) {
                         DB.addPoints(Auth.currentUser.uid, totalScore, `Quiz: ${this.currentQuiz.title}`)

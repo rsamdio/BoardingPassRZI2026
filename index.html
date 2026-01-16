@@ -514,7 +514,7 @@
             <!-- Header (fixed) -->
             <div class="p-6 border-b border-slate-100 flex justify-between items-center shrink-0">
                 <h3 id="task-form-modal-title" class="font-bold text-xl text-slate-800">Complete Form</h3>
-                <button onclick="closeModal('modal-task-form')" class="w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors"><i class="fas fa-times"></i></button>
+                <button type="button" onclick="event.preventDefault(); event.stopPropagation(); closeModal('modal-task-form', event); return false;" class="w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors"><i class="fas fa-times"></i></button>
             </div>
             <!-- Scrollable form content -->
             <div class="flex-1 overflow-y-auto px-6 py-4">
@@ -538,7 +538,7 @@
                     <h3 id="survey-form-modal-title" class="font-bold text-xl text-slate-800 mb-2">Survey</h3>
                     <p id="survey-form-description" class="text-sm text-slate-500"></p>
                 </div>
-                <button onclick="closeModal('modal-survey-form')" class="w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors shrink-0"><i class="fas fa-times"></i></button>
+                <button type="button" onclick="event.preventDefault(); event.stopPropagation(); closeModal('modal-survey-form', event); return false;" class="w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors shrink-0"><i class="fas fa-times"></i></button>
             </div>
             <!-- Scrollable form content -->
             <div class="flex-1 overflow-y-auto px-6 py-4">

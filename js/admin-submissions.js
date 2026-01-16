@@ -15,6 +15,7 @@ const AdminSubmissions = {
     _settingUpListeners: false, // Flag to prevent listener callbacks during setup
     _justLoaded: false, // Flag to prevent immediate listener-triggered reload after load
     _lastLoadTime: 0, // Timestamp of last load to prevent rapid reloads
+    _listenerSetupTimeouts: {}, // Track setTimeout IDs for listener setup to allow cleanup
     
     /**
      * Load submissions
@@ -166,11 +167,21 @@ const AdminSubmissions = {
             
             // Now set up the listener - it will fire immediately, but we'll ignore it if _justLoaded is true
             // Use a small delay to ensure _justLoaded flag is set before listener fires
-            setTimeout(() => {
-                ref.on('value', this.statusListeners[status], (error) => {
-                    console.error(`Error listening to ${status} submissions:`, error);
-                });
+            // Store timeout ID to allow cleanup if listener is removed before setup completes
+            const timeoutId = setTimeout(() => {
+                // Double-check listener still exists (might have been cleaned up)
+                if (this.statusListeners[status]) {
+                    ref.on('value', this.statusListeners[status], (error) => {
+                        console.error(`Error listening to ${status} submissions:`, error);
+                    });
+                }
             }, 100);
+            
+            // Store timeout ID for potential cleanup
+            if (!this._listenerSetupTimeouts) {
+                this._listenerSetupTimeouts = {};
+            }
+            this._listenerSetupTimeouts[status] = timeoutId;
         });
     },
     
@@ -186,6 +197,15 @@ const AdminSubmissions = {
             }
         });
         this.statusListeners = {};
+        
+        // Clear any pending listener setup timeouts
+        if (this._listenerSetupTimeouts) {
+            Object.values(this._listenerSetupTimeouts).forEach(timeoutId => {
+                clearTimeout(timeoutId);
+            });
+            this._listenerSetupTimeouts = {};
+        }
+        
         if (this._refreshTimeout) {
             clearTimeout(this._refreshTimeout);
             this._refreshTimeout = null;
@@ -365,19 +385,132 @@ const AdminSubmissions = {
         }
         
         try {
-            // Process all submissions in parallel
-            const submissionCards = await Promise.all(
+            // OPTIMIZATION: Batch load full submissions for form types only (to get formData)
+            // This reduces Firestore reads from N individual reads to batch reads
+            const formSubmissionIds = this.submissions
+                .filter(s => s && s.id && (s.type === 'form' || s.submissionType === 'form') && !s.formData)
+                .map(s => s.id)
+                .filter(id => id); // Remove any null/undefined IDs
+            
+            const fullSubmissionsMap = new Map();
+            if (formSubmissionIds.length > 0) {
+                // Firestore 'in' operator has a limit of 10, so batch in chunks
+                const batchSize = 10;
+                const batches = [];
+                for (let i = 0; i < formSubmissionIds.length; i += batchSize) {
+                    batches.push(formSubmissionIds.slice(i, i + batchSize));
+                }
+                
+                // Load all batches in parallel with error handling
+                const batchPromises = batches.map(async (batch) => {
+                    try {
+                        // Firestore 'in' operator requires non-empty array
+                        if (!batch || batch.length === 0) {
+                            return;
+                        }
+                        
+                        // Try submissions collection first (most form submissions are here)
+                        const submissionsSnapshot = await DB.db.collection('submissions')
+                            .where(firebase.firestore.FieldPath.documentId(), 'in', batch)
+                            .get();
+                        
+                        submissionsSnapshot.docs.forEach(doc => {
+                            fullSubmissionsMap.set(doc.id, { id: doc.id, ...doc.data() });
+                        });
+                        
+                        // Check which IDs weren't found in submissions, try formSubmissions
+                        const foundIds = new Set(submissionsSnapshot.docs.map(d => d.id));
+                        const missingIds = batch.filter(id => !foundIds.has(id));
+                        
+                        if (missingIds.length > 0) {
+                            const formSubmissionsSnapshot = await DB.db.collection('formSubmissions')
+                                .where(firebase.firestore.FieldPath.documentId(), 'in', missingIds)
+                                .get();
+                            
+                            formSubmissionsSnapshot.docs.forEach(doc => {
+                                fullSubmissionsMap.set(doc.id, { id: doc.id, ...doc.data() });
+                            });
+                        }
+                    } catch (error) {
+                        // Log error but don't fail entire batch - continue with other batches
+                        console.error(`Error loading batch of submissions:`, error, batch);
+                    }
+                });
+                
+                // Use Promise.allSettled to handle partial failures gracefully
+                const results = await Promise.allSettled(batchPromises);
+                // Log any rejected promises for debugging
+                results.forEach((result, index) => {
+                    if (result.status === 'rejected') {
+                        console.error(`Batch ${index} failed:`, result.reason);
+                    }
+                });
+            }
+            
+            // OPTIMIZATION: Batch load all unique task/form definitions before rendering
+            // Extract all unique task IDs and form IDs from submissions
+            const uniqueTaskIds = [...new Set(
+                this.submissions
+                    .filter(s => s && s.taskId)
+                    .map(s => s.taskId)
+                    .filter(id => id)
+            )];
+            const uniqueFormIds = [...new Set(
+                this.submissions
+                    .filter(s => s && (s.formId || (s.submissionType === 'form' && s.taskId)))
+                    .map(s => s.formId || (s.submissionType === 'form' ? s.taskId : null))
+                    .filter(id => id)
+            )];
+            
+            // Batch load task and form definitions in parallel
+            const [taskCacheMap, formCacheMap] = await Promise.all([
+                uniqueTaskIds.length > 0 ? DB.getTasksBatch(uniqueTaskIds) : Promise.resolve(new Map()),
+                uniqueFormIds.length > 0 ? DB.getFormsBatch(uniqueFormIds) : Promise.resolve(new Map())
+            ]);
+            
+            // Convert Maps to the format expected by renderSubmissionCard
+            const taskCache = taskCacheMap;
+            const formCache = formCacheMap;
+            
+            // Process all submissions in parallel with error handling
+            const submissionCards = await Promise.allSettled(
                 this.submissions.map(async (submission) => {
-                    return await this.renderSubmissionCard(submission);
+                    // Validate submission object
+                    if (!submission || !submission.id) {
+                        console.warn('Invalid submission object:', submission);
+                        return null;
+                    }
+                    
+                    // Merge full submission data if available
+                    if (fullSubmissionsMap.has(submission.id)) {
+                        submission = {
+                            ...submission,
+                            ...fullSubmissionsMap.get(submission.id)
+                        };
+                    }
+                    return await this.renderSubmissionCard(submission, taskCache, formCache);
                 })
             );
             
+            // Extract successful results and log failures
+            const validCards = [];
+            submissionCards.forEach((result, index) => {
+                if (result.status === 'fulfilled' && result.value) {
+                    validCards.push(result.value);
+                } else if (result.status === 'rejected') {
+                    console.error(`Error rendering submission card ${index}:`, result.reason);
+                }
+            });
+            
             // Append all cards to the list
-            submissionCards.forEach(html => {
+            validCards.forEach(html => {
                 if (html) {
                     const tempDiv = document.createElement('div');
                     tempDiv.innerHTML = html;
-                    list.appendChild(tempDiv.firstElementChild);
+                    const cardElement = tempDiv.firstElementChild;
+                    if (cardElement) {
+                        list.appendChild(cardElement);
+                    }
                 }
             });
         } catch (error) {
@@ -389,20 +522,33 @@ const AdminSubmissions = {
     /**
      * Render a single submission card
      * @param {Object} submission - Submission object
+     * @param {Map} taskCache - Cache of task definitions to avoid repeated reads
+     * @param {Map} formCache - Cache of form definitions to avoid repeated reads
      * @returns {string} HTML string
      */
-    async renderSubmissionCard(submission) {
+    async renderSubmissionCard(submission, taskCache = new Map(), formCache = new Map()) {
         try {
+            
             // Format date properly
             const formattedDate = Utils.formatDate(submission.submittedAt);
             
             // Get task definition to map form field IDs to labels (only for task-type forms)
+            // Use cache to avoid repeated Firestore reads
             let fieldLabelsMap = {};
             let task = null;
             try {
                 if (submission.type === 'form' && submission.taskId) {
-                    // This is a task-type form
-                    task = await DB.getTask(submission.taskId);
+                    // Check cache first
+                    if (taskCache.has(submission.taskId)) {
+                        task = taskCache.get(submission.taskId);
+                    } else {
+                        // This is a task-type form
+                        task = await DB.getTask(submission.taskId);
+                        if (task) {
+                            taskCache.set(submission.taskId, task);
+                        }
+                    }
+                    
                     if (task) {
                         if (task.formFields && Array.isArray(task.formFields)) {
                             task.formFields.forEach(field => {
@@ -411,7 +557,6 @@ const AdminSubmissions = {
                                 }
                             });
                         }
-                    } else {
                     }
                 }
             } catch (e) {
@@ -624,7 +769,64 @@ const AdminSubmissions = {
             return;
         }
         
-        const submission = submissions[currentIndex];
+        // Get submission from cache (metadata only)
+        const cachedSubmission = submissions[currentIndex];
+        
+        // OPTIMIZATION: Pre-load current, previous, and next submissions in batch for instant navigation
+        const submissionIdsToLoad = [];
+        if (currentIndex >= 0 && currentIndex < submissions.length) {
+            submissionIdsToLoad.push(submissions[currentIndex].id);
+        }
+        if (currentIndex > 0) {
+            submissionIdsToLoad.push(submissions[currentIndex - 1].id);
+        }
+        if (currentIndex < submissions.length - 1) {
+            submissionIdsToLoad.push(submissions[currentIndex + 1].id);
+        }
+        
+        // Batch load all adjacent submissions
+        const adjacentSubmissionsMap = await DB.loadFullSubmissionsBatch(submissionIdsToLoad);
+        
+        // Store in memory for instant navigation (if not already stored)
+        if (!this._preloadedSubmissions) {
+            this._preloadedSubmissions = new Map();
+        }
+        adjacentSubmissionsMap.forEach((sub, id) => {
+            this._preloadedSubmissions.set(id, sub);
+        });
+        
+        // Get current submission (check pre-loaded cache first, then batch load, then individual load as fallback)
+        let fullSubmission = null;
+        if (this._preloadedSubmissions && this._preloadedSubmissions.has(cachedSubmission.id)) {
+            fullSubmission = this._preloadedSubmissions.get(cachedSubmission.id);
+        } else {
+            fullSubmission = adjacentSubmissionsMap.get(cachedSubmission.id);
+            if (!fullSubmission) {
+                // Fallback: load individually if batch load didn't include it
+                fullSubmission = await this.loadFullSubmission(cachedSubmission.id);
+                // Store in cache for future use
+                if (fullSubmission && !this._preloadedSubmissions) {
+                    this._preloadedSubmissions = new Map();
+                }
+                if (fullSubmission && this._preloadedSubmissions) {
+                    this._preloadedSubmissions.set(cachedSubmission.id, fullSubmission);
+                }
+            } else {
+                // Store in cache for future use
+                if (!this._preloadedSubmissions) {
+                    this._preloadedSubmissions = new Map();
+                }
+                this._preloadedSubmissions.set(cachedSubmission.id, fullSubmission);
+            }
+        }
+        
+        
+        // Merge full submission data with cached metadata (full submission takes precedence)
+        const submission = {
+            ...cachedSubmission,
+            ...fullSubmission
+        };
+        
         
         // Update title and type
         titleEl.textContent = submission.taskTitle || submission.title || 'Untitled Submission';
@@ -1416,5 +1618,78 @@ const AdminSubmissions = {
                 input.addEventListener('keydown', handleKeyDown);
             }
         });
+    },
+    
+    /**
+     * Bulk approve submissions using batch writes (optional enhancement)
+     * @param {string[]} submissionIds - Array of submission IDs to approve
+     * @param {string} submissionType - Submission type ('task' or 'form')
+     * @returns {Promise<void>}
+     */
+    async bulkApproveSubmissions(submissionIds, submissionType = 'task') {
+        if (!submissionIds || submissionIds.length === 0) {
+            Toast.error('No submissions selected');
+            return;
+        }
+        
+        if (!AdminAuth.currentAdmin || !AdminAuth.currentAdmin.uid) {
+            throw new Error('Admin authentication required');
+        }
+        
+        try {
+            const updates = submissionIds.map(submissionId => ({
+                id: submissionId,
+                collection: 'submissions',
+                data: {
+                    status: 'approved',
+                    reviewedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    reviewedBy: AdminAuth.currentAdmin.uid
+                }
+            }));
+            
+            await DB.batchUpdateSubmissions(updates);
+            Toast.success(`Successfully approved ${submissionIds.length} submission(s)`);
+        } catch (error) {
+            console.error('Error in bulk approve:', error);
+            Toast.error('Failed to approve submissions: ' + error.message);
+            throw error;
+        }
+    },
+    
+    /**
+     * Bulk reject submissions using batch writes (optional enhancement)
+     * @param {string[]} submissionIds - Array of submission IDs to reject
+     * @param {string} rejectionReason - Reason for rejection
+     * @returns {Promise<void>}
+     */
+    async bulkRejectSubmissions(submissionIds, rejectionReason = '') {
+        if (!submissionIds || submissionIds.length === 0) {
+            Toast.error('No submissions selected');
+            return;
+        }
+        
+        if (!AdminAuth.currentAdmin || !AdminAuth.currentAdmin.uid) {
+            throw new Error('Admin authentication required');
+        }
+        
+        try {
+            const updates = submissionIds.map(submissionId => ({
+                id: submissionId,
+                collection: 'submissions',
+                data: {
+                    status: 'rejected',
+                    rejectionReason: rejectionReason || '',
+                    reviewedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    reviewedBy: AdminAuth.currentAdmin.uid
+                }
+            }));
+            
+            await DB.batchUpdateSubmissions(updates);
+            Toast.success(`Successfully rejected ${submissionIds.length} submission(s)`);
+        } catch (error) {
+            console.error('Error in bulk reject:', error);
+            Toast.error('Failed to reject submissions: ' + error.message);
+            throw error;
+        }
     }
 };

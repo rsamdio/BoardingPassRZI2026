@@ -80,7 +80,6 @@ const AdminAuth = {
             // This is critical for adminCache access - must complete before app init
             try {
                 await this.syncAdminsToRTDB();
-                console.log('Admins synced to RTDB successfully');
             } catch (err) {
                 console.error('Failed to sync admins to RTDB:', err);
                 // Show warning but don't block login
@@ -200,12 +199,10 @@ const AdminAuth = {
             const syncAdminsCallable = functions.httpsCallable('syncAdminsCallable');
             
             try {
-                const result = await syncAdminsCallable();
-                console.log('Admins synced to RTDB:', result.data.message);
+                await syncAdminsCallable();
                 return;
             } catch (callableError) {
                 // If callable fails, try HTTP endpoint as fallback
-                console.log('Callable function failed, trying HTTP endpoint...', callableError);
             }
             
             // Fallback: Use HTTP request to syncAdmins endpoint
@@ -225,8 +222,7 @@ const AdminAuth = {
                 throw new Error(`HTTP ${response.status}: ${errorText}`);
             }
             
-            const result = await response.text();
-            console.log('Admins synced to RTDB:', result);
+            await response.text();
         } catch (error) {
             console.error('Error syncing admins to RTDB:', error);
             // Don't throw - this is non-critical for login

@@ -950,7 +950,7 @@ const AdminQuizzes = {
                 data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
                 DB.db.collection('quizzes').doc(quizId).update(data)
                     .then(() => {
-                        Toast.success('Quiz updated successfully');
+                Toast.success('Quiz updated successfully');
                     })
                     .catch((error) => {
                         console.error('Error updating quiz:', error);
@@ -980,8 +980,8 @@ const AdminQuizzes = {
                 data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
                 DB.db.collection('quizzes').add(data)
                     .then((docRef) => {
-                        savedQuizId = docRef.id;
-                        Toast.success('Quiz created successfully');
+                savedQuizId = docRef.id;
+                Toast.success('Quiz created successfully');
                         
                         // Update the optimistic item with real ID
                         const tempIndex = this.quizzes.findIndex(q => q.id === newQuiz.id);
@@ -1105,21 +1105,24 @@ const AdminQuizzes = {
                 directory = directoryResult?.data || {};
             }
             
-            // Fetch user data for all userIds
-            await Promise.all(userIds.map(async (userId) => {
+            // Fetch user data for all userIds - use batch loading for optimization
+            // First, populate from cache
+            userIds.forEach(userId => {
                 if (directory[userId]) {
                     usersMap.set(userId, directory[userId]);
-                } else {
-                    // Fallback: fetch from Firestore if not in cache
-                    try {
-                        const user = await DB.getUser(userId, false);
-                        if (user) {
-                            usersMap.set(userId, user);
-                        }
-                    } catch (error) {
-                    }
                 }
-            }));
+            });
+            
+            // Identify which users are missing from cache
+            const missingUserIds = userIds.filter(userId => !usersMap.has(userId));
+            
+            // Batch load missing users from Firestore
+            if (missingUserIds.length > 0) {
+                const batchUsersMap = await DB.getUsersBatch(missingUserIds);
+                batchUsersMap.forEach((user, userId) => {
+                    usersMap.set(userId, user);
+                });
+            }
             
             // Store submissions data
             this.currentQuizSubmissions = {
@@ -1486,7 +1489,7 @@ const AdminQuizzes = {
             DB.db.collection('quizzes').doc(quizId).delete()
                 .then(() => {
                     // Clear caches
-                    DB.invalidateCache('quiz');
+            DB.invalidateCache('quiz');
                     Cache.clear(Cache.keys.quizList());
                     
                     // Show success message
@@ -1495,8 +1498,8 @@ const AdminQuizzes = {
                     // Real-time listener will confirm the update when Cloud Function completes
                 })
                 .catch((error) => {
-                    console.error('Error deleting quiz:', error);
-                    Toast.error('Failed to delete quiz: ' + error.message);
+            console.error('Error deleting quiz:', error);
+            Toast.error('Failed to delete quiz: ' + error.message);
                     
                     // Rollback optimistic update on error
                     if (operationId) {

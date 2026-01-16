@@ -47,6 +47,7 @@ const SubmissionHelpers = {
      */
     async optimisticallyRemoveFromPending(userId, activityType, activityId) {
         try {
+            
             // First, smoothly remove from UI
             this.optimisticallyRemoveFromUI(activityId, activityType);
             
@@ -57,12 +58,14 @@ const SubmissionHelpers = {
                 return itemId !== activityId;
             });
             
+            
             // Update localStorage cache immediately
             const cacheKey = `rtdb_cache_cache_users_${userId}_pendingActivities_combined`;
             Cache.set(cacheKey, {
                 data: updatedPending,
                 timestamp: Date.now()
             }, 'SYSTEM');
+            
             
             return true;
         } catch (error) {

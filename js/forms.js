@@ -3,6 +3,18 @@ const Forms = {
     currentForm: null,
     
     async openForm(formId) {
+        
+        // If stuck in submitting state, reset it (safety check)
+        if (this._submitting) {
+            this._submitting = false;
+        }
+        
+        // Close any existing modal first
+        const existingModal = document.querySelector('[id^="modal-"]:not(.hidden)');
+        if (existingModal) {
+            closeModal(existingModal.id);
+        }
+        
         const form = await DB.getForm(formId);
         if (!form) {
             showToast('Form not found', 'error');
@@ -19,6 +31,20 @@ const Forms = {
         this.currentForm = form;
         document.getElementById('survey-form-modal-title').textContent = form.title;
         document.getElementById('survey-form-description').textContent = form.description || '';
+        
+        // CRITICAL: Reset close button state before showing modal
+        const modal = document.getElementById('modal-survey-form');
+        const closeBtn = modal.querySelector('button[onclick*="closeModal"]');
+        if (closeBtn) {
+            closeBtn.style.pointerEvents = 'auto';
+        }
+        
+        // Reset submit button state
+        const submitBtn = modal.querySelector('button[type="submit"]');
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = 'Submit';
+        }
         
         const formEl = document.getElementById('survey-form');
         formEl.innerHTML = '';
@@ -73,7 +99,8 @@ const Forms = {
             });
         }
         
-        document.getElementById('modal-survey-form').classList.remove('hidden');
+        // Show modal (close button already reset above)
+        modal.classList.remove('hidden');
     },
     
     async submitSurveyForm(event) {
@@ -81,12 +108,20 @@ const Forms = {
         
         if (!this.currentForm) return;
         
+        
+        // Prevent double submission
+        if (this._submitting) {
+            return;
+        }
+        
         // Check if already submitting
         const submitBtn = event.target.querySelector('button[type="submit"]') || 
                          document.querySelector('#modal-survey-form button[type="submit"]');
         if (submitBtn && submitBtn.disabled) {
             return; // Already submitting
         }
+        
+        this._submitting = true;
         
         // CRITICAL: Collect FormData BEFORE disabling fields
         // Disabled form fields are NOT included in FormData!
@@ -166,17 +201,22 @@ const Forms = {
             const submittedAt = firebase.firestore.Timestamp.now ? firebase.firestore.Timestamp.now() : new Date();
             const submittedAtTimestamp = submittedAt.getTime ? submittedAt.getTime() : (submittedAt.toMillis ? submittedAt.toMillis() : Date.now());
             
+            // CRITICAL: Capture form ID and title before closing modal (to avoid null reference in async handlers)
+            const formId = this.currentForm.id;
+            const formTitle = this.currentForm.title;
+            const formPoints = this.currentForm.points || 0;
+            
             const submission = {
                 userId: Auth.currentUser.uid,
                 userName: Auth.currentUser.name,
-                formId: this.currentForm.id,
-                formTitle: this.currentForm.title,
+                formId: formId,
+                formTitle: formTitle,
                 formData: formDataObj, // This should be a plain object with field IDs as keys
                 submittedAt: submittedAt // Use Firestore Timestamp if available
             };
             
             // IMMEDIATE UX: Show submitting state on card BEFORE database write
-            SubmissionHelpers.showSubmittingState(this.currentForm.id, 'form');
+            SubmissionHelpers.showSubmittingState(formId, 'form');
             
             // Update button text
             if (submitBtn) {
@@ -188,11 +228,12 @@ const Forms = {
             await SubmissionHelpers.optimisticallyRemoveFromPending(
                 Auth.currentUser.uid,
                 'form',
-                this.currentForm.id
+                formId
             );
             
             // Close modal immediately (don't wait for database)
             closeModal('modal-survey-form');
+            
             
             // Show success toast immediately
             Toast.success('Form submitted successfully!');
@@ -200,31 +241,56 @@ const Forms = {
             // Submit to database (async - don't wait for Cloud Function)
             DB.submitForm(submission)
                 .then(() => {
+                    
                     // Mark as completed locally
                     CompletionManager.markCompletedLocally(
                         Auth.currentUser.uid,
                         'form',
-                        this.currentForm.id,
+                        formId,
                         {
                             submittedAt: submittedAtTimestamp
                         }
                     );
                     
                     // Award points if form has points (async)
-                    if (this.currentForm.points > 0) {
-                        DB.addPoints(Auth.currentUser.uid, this.currentForm.points, `Form: ${this.currentForm.title}`)
+                    if (formPoints > 0) {
+                        DB.addPoints(Auth.currentUser.uid, formPoints, `Form: ${formTitle}`)
                             .catch(error => {
                                 console.error('Error awarding points:', error);
                             });
                     }
+                    
+                    this._submitting = false;
+                    this.currentForm = null;
+                    
+                    // Re-enable close button in case modal is still open
+                    const closeBtn = document.querySelector('#modal-survey-form button[onclick*="closeModal"]');
+                    if (closeBtn) {
+                        closeBtn.style.pointerEvents = 'auto';
+                    }
                 })
                 .catch(error => {
+                    
                     console.error('Error submitting form:', error);
                     Toast.error('Failed to submit form. Please try again.');
                     // Rollback optimistic update on error
-                    SubmissionHelpers.rollbackSubmission(this.currentForm.id, 'form');
+                    SubmissionHelpers.rollbackSubmission(formId, 'form');
+                    
+                    this._submitting = false;
+                    
+                    // Re-enable close button and submit button
+                    const closeBtn = document.querySelector('#modal-survey-form button[onclick*="closeModal"]');
+                    if (closeBtn) {
+                        closeBtn.style.pointerEvents = 'auto';
+                    }
+                    const submitBtn = document.querySelector('#modal-survey-form button[type="submit"]');
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = 'Submit';
+                    }
                 });
         } catch (error) {
+            
             // Re-enable button and form fields on error
             if (submitBtn) {
                 submitBtn.disabled = false;
@@ -233,6 +299,8 @@ const Forms = {
             formFields.forEach(field => field.disabled = false);
             if (closeBtn) closeBtn.style.pointerEvents = 'auto';
             showToast('Submission failed: ' + error.message, 'error');
+            
+            this._submitting = false;
         }
     }
 };

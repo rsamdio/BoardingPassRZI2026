@@ -103,7 +103,7 @@ const Auth = {
         } catch (e) {
             // Non-critical: if cache clear fails, RTDB cache will still correct it over time
         }
-
+        
         // Initialize dashboard immediately - don't wait for update
         App.initializeDashboard();
         

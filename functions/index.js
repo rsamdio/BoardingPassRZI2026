@@ -39,16 +39,16 @@ async function updateLeaderboardCache() {
 
       // Build top 50 leaderboard data (index 0–49)
       if (index < 50) {
-        leaderboardData[index] = {
-          uid: doc.id,
-          name: data.name || data.displayName || "User",
-          email: data.email || null,
-          district: data.district || null,
-          designation: data.designation || null,
+      leaderboardData[index] = {
+        uid: doc.id,
+        name: data.name || data.displayName || "User",
+        email: data.email || null,
+        district: data.district || null,
+        designation: data.designation || null,
           points: points,
-          photoURL: data.photoURL || data.photo || null,
-          photo: data.photoURL || data.photo || null, // Keep both for backward compatibility
-        };
+        photoURL: data.photoURL || data.photo || null,
+        photo: data.photoURL || data.photo || null, // Keep both for backward compatibility
+      };
       }
 
       // Rank data for this user (all users)
@@ -67,7 +67,7 @@ async function updateLeaderboardCache() {
     // Fill remaining leaderboard slots with null if less than 50
     for (let i = index; i < 50; i++) {
       if (leaderboardData[i] === undefined) {
-        leaderboardData[i] = null;
+      leaderboardData[i] = null;
       }
     }
 
@@ -544,6 +544,7 @@ async function updateTasksCache() {
         status: data.status || "inactive",
         points: data.points || 0,
         submissionsCount: submissionCounts[doc.id] || 0,
+        formFields: data.formFields || [], // Include full formFields array for form-type tasks
         formFieldsCount: (data.formFields && data.formFields.length) || 0,
         createdAt: data.createdAt ? data.createdAt.toMillis() : 0,
         updatedAt: data.updatedAt ? data.updatedAt.toMillis() : (data.createdAt ? data.createdAt.toMillis() : 0),
@@ -1189,8 +1190,29 @@ async function removeActivityFromCache(activityType, activityId) {
     
     const activityData = activitySnap.val();
     const points = activityData.totalPoints || activityData.points || 0;
-    const date = activityData.createdAt?.toDate?.()?.toISOString().split('T')[0] || 
-                 (activityData.createdAt ? new Date(activityData.createdAt).toISOString().split('T')[0] : null);
+    
+    // Safely extract date, handling invalid dates
+    let date = null;
+    if (activityData.createdAt) {
+      try {
+        // Try Firestore Timestamp first
+        if (activityData.createdAt.toDate && typeof activityData.createdAt.toDate === 'function') {
+          const dateObj = activityData.createdAt.toDate();
+          if (dateObj && !isNaN(dateObj.getTime())) {
+            date = dateObj.toISOString().split('T')[0];
+          }
+        } else {
+          // Try as regular date
+          const dateObj = new Date(activityData.createdAt);
+          if (dateObj && !isNaN(dateObj.getTime())) {
+            date = dateObj.toISOString().split('T')[0];
+          }
+        }
+      } catch (error) {
+        // Invalid date, skip date-based removal
+        console.warn(`Invalid date for activity ${activityId}:`, activityData.createdAt);
+      }
+    }
     
     const updates = {};
     
@@ -1237,11 +1259,13 @@ async function removeActivityFromCache(activityType, activityId) {
  */
 async function getActivitiesFromIndexedCache() {
   try {
+    
     const [quizzesSnap, tasksSnap, formsSnap] = await Promise.all([
       rtdb.ref('cache/activities/quizzes/byId').once('value'),
       rtdb.ref('cache/activities/tasks/byId').once('value'),
       rtdb.ref('cache/activities/forms/byId').once('value')
     ]);
+    
     
     // CRITICAL: Filter to only include 'active' activities
     // This ensures inactive activities don't appear in pending missions
@@ -1252,11 +1276,14 @@ async function getActivitiesFromIndexedCache() {
       });
     };
     
-    return {
+    const result = {
       quizzes: filterActive(quizzesSnap.val()),
       tasks: filterActive(tasksSnap.val()),
       forms: filterActive(formsSnap.val())
     };
+    
+    
+    return result;
   } catch (error) {
     console.error("Error getting activities from indexed cache:", error);
     return { quizzes: [], tasks: [], forms: [] };
@@ -1288,7 +1315,6 @@ async function getCompletionStatusFromCache(userId) {
  */
 async function updateUserActivityLists(userId, excludeActivityIds = []) {
   try {
-    
     // Fetch from indexed cache (not Firestore)
     const activities = await getActivitiesFromIndexedCache();
     const completion = await getCompletionStatusFromCache(userId);
@@ -1468,14 +1494,12 @@ async function triggerUserActivityListUpdates(activityId = null, activityType = 
     await Promise.all(
       userIds.map(uid => 
         updateUserActivityLists(uid, excludeIds).catch(err => {
-          console.error(`Failed to update lists for ${uid}:`, err);
+            console.error(`Failed to update lists for ${uid}:`, err);
           // Return null on error so Promise.all doesn't fail
           return null;
-        })
-      )
+          })
+        )
     );
-    
-    console.log(`Updated activity lists for ${userIds.length} users${excludeIds.length > 0 ? ` (excluded: ${excludeIds.join(', ')})` : ''}`);
     
   } catch (error) {
     console.error("Error triggering user activity list updates:", error);
@@ -1607,8 +1631,12 @@ async function updateUserCompletion(userId, activityType, activityId, completion
     
     await rtdb.ref().update(updates);
     
+    
     // Trigger pre-compute update for this user
+    const listUpdateStart = Date.now();
     await updateUserActivityLists(userId);
+    const listUpdateEnd = Date.now();
+    
   } catch (error) {
     console.error(`[updateUserCompletion] Error updating user completion for ${userId}:`, error);
     throw error;
@@ -1987,25 +2015,30 @@ exports.onSubmissionCreate = onDocumentCreated(
       const submissionData = event.data.data();
       const { userId, taskId } = submissionData;
       
+      
       // CRITICAL: Update user activity list FIRST (fastest path to remove from pending)
       // This ensures the card disappears from user's pending list as quickly as possible
       if (taskId) {
         // Update completion status and activity list in parallel with submission cache
+        const parallelStart = Date.now();
         await Promise.all([
           updateSubmissionLists(event.params.submissionId, submissionData, 'create'),
           updateUserCompletion(userId, 'task', taskId, {
-            completed: true,
-            status: 'pending',
-            submittedAt: submissionData.submittedAt?.toMillis?.() || 
-                         (submissionData.submittedAt ? new Date(submissionData.submittedAt).getTime() : Date.now())
+          completed: true,
+          status: 'pending',
+          submittedAt: submissionData.submittedAt?.toMillis?.() || 
+                       (submissionData.submittedAt ? new Date(submissionData.submittedAt).getTime() : Date.now())
           })
-          // Note: updateUserCompletion already calls updateUserActivityLists internally
+        // Note: updateUserCompletion already calls updateUserActivityLists internally
         ]);
+        const parallelEnd = Date.now();
+        
       } else {
         await updateSubmissionLists(event.params.submissionId, submissionData, 'create');
       }
       
       // Step 2: Update other caches in parallel (non-blocking for user experience)
+      
       Promise.all([
         // Update user stats
         updateUserStats(userId),
@@ -2016,7 +2049,8 @@ exports.onSubmissionCreate = onDocumentCreated(
         // Update old caches (for backward compatibility)
         updateUserCompletionStatusCache(userId),
         taskId ? updateTasksCache() : Promise.resolve()
-      ]).catch(err => {
+      ]).then(() => {
+      }).catch(err => {
         console.error('Error updating secondary caches:', err);
         // Don't throw - user list is already updated
       });
@@ -2223,18 +2257,18 @@ exports.onQuizSubmissionCreate = onDocumentCreated(
       // This ensures the card disappears from user's pending list as quickly as possible
       await Promise.all([
         updateSubmissionLists(event.params.submissionId, {
-          ...submissionData,
-          quizId: quizId,
-          status: 'completed',
-          pointsAwarded: score
+        ...submissionData,
+        quizId: quizId,
+        status: 'completed',
+        pointsAwarded: score
         }, 'create'),
         updateUserCompletion(userId, 'quiz', quizId, {
-          completed: true,
-          submittedAt: submittedAtTimestamp,
-          points: score,
-          score: score // Include both for consistency
+        completed: true,
+        submittedAt: submittedAtTimestamp,
+        points: score,
+        score: score // Include both for consistency
         })
-        // Note: updateUserCompletion already calls updateUserActivityLists internally
+      // Note: updateUserCompletion already calls updateUserActivityLists internally
       ]);
       
       // Step 2: Update other caches in parallel (non-blocking for user experience)
@@ -2365,7 +2399,6 @@ exports.onQuizCreate = onDocumentCreated(
       // Step 2: Trigger user list updates for all users in parallel
       await triggerUserActivityListUpdates(null, 'quizzes');
       
-      console.log(`Quiz ${quizId} created and user lists updated for all users`);
       return null;
     }
 );
@@ -2475,18 +2508,22 @@ exports.onTaskCreate = onDocumentCreated(
       const taskData = event.data.data();
       const taskId = event.params.taskId;
       
+      
       // Step 1: Update all caches in parallel (no verification needed - RTDB writes are atomic)
+      const cacheUpdateStart = Date.now();
       await Promise.all([
         updateActivityInCache('tasks', taskId, taskData),
         updateTasksCache(),
         updateAttendeeActivitiesCache(),
         updateActivityMetadataCache()
       ]);
+      const cacheUpdateEnd = Date.now();
+      
       
       // Step 2: Trigger user list updates for all users in parallel
+      const listUpdateStart = Date.now();
       await triggerUserActivityListUpdates(null, 'tasks');
       
-      console.log(`Task ${taskId} created and user lists updated for all users`);
       return null;
     }
 );
@@ -2538,6 +2575,8 @@ exports.onTaskDelete = onDocumentDeleted(
     async (event) => {
       const taskId = event.params.taskId;
       
+      
+      
       // Delete all submissions for this task
       const submissionsSnapshot = await db.collection("submissions")
         .where("taskId", "==", taskId)
@@ -2557,12 +2596,15 @@ exports.onTaskDelete = onDocumentDeleted(
       }
 
       // Step 1: Remove from indexed structure and update caches
+      const cacheRemoveStart = Date.now();
       await Promise.all([
         removeActivityFromCache('tasks', taskId),
         updateTasksCache(),
         updateAttendeeActivitiesCache(),
         updateActivityMetadataCache()
       ]);
+      const cacheRemoveEnd = Date.now();
+      
 
       // Verify the task is removed from indexed cache before updating user lists
       const verifyRef = rtdb.ref(`cache/activities/tasks/byId/${taskId}`);
@@ -2588,10 +2630,8 @@ exports.onTaskDelete = onDocumentDeleted(
 
       // Step 3: Trigger pre-compute updates for ALL users (to remove task from pending lists)
       // This is critical - even users without submissions need their pending lists updated
+      const listUpdateStart = Date.now();
       await triggerUserActivityListUpdates(taskId, 'tasks');
-      
-      console.log(`Task ${taskId} deleted and user lists updated for all users`);
-      
       return null;
     }
 );
@@ -2619,7 +2659,6 @@ exports.onFormCreate = onDocumentCreated(
       // Step 2: Trigger user list updates for all users in parallel
       await triggerUserActivityListUpdates(null, 'forms');
       
-      console.log(`Form ${formId} created and user lists updated for all users`);
       return null;
     }
 );

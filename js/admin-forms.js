@@ -295,7 +295,7 @@ const AdminForms = {
             // Save form fields
             if (fieldsList) {
                 Array.from(fieldsList.children).forEach(fieldEl => {
-                    const fieldId = fieldEl.querySelector('input[type="hidden"]')?.value;
+                    const fieldId = fieldEl.querySelector('.field-id')?.value || fieldEl.querySelector('input[type="hidden"]')?.value;
                     const fieldLabel = fieldEl.querySelector('.field-label')?.value?.trim();
                     const fieldType = fieldEl.querySelector('.field-type')?.value;
                     const fieldRequired = fieldEl.querySelector('.field-required')?.checked;
@@ -571,18 +571,28 @@ const AdminForms = {
     addFormField(existingField = null) {
         const fieldsList = document.getElementById('form-fields-list');
         if (!fieldsList) {
-            Toast.error('Form fields list not found');
+            Toast.error('Form fields list not found. Please make sure you are on step 2 of form creation.');
+            console.error('form-fields-list element not found');
             return;
+        }
+        
+        // Ensure fieldCounter is initialized
+        if (typeof this.fieldCounter === 'undefined') {
+            this.fieldCounter = 0;
         }
         
         const fieldId = existingField?.id || 'f' + Date.now() + '.' + this.fieldCounter++;
         
+        // Count only form-field-container elements for accurate field numbering
+        const existingFields = fieldsList.querySelectorAll('.form-field-container');
+        const fieldNumber = existingFields.length + 1;
+        
         const fieldEl = document.createElement('div');
         fieldEl.className = 'form-field-container border border-slate-200 rounded-lg p-4 bg-white';
         fieldEl.innerHTML = `
-            <input type="hidden" value="${this.escapeHtml(fieldId)}">
+            <input type="hidden" class="field-id" value="${this.escapeHtml(fieldId)}">
             <div class="flex justify-between items-center mb-3">
-                <span class="font-bold text-slate-700">Field ${fieldsList.children.length + 1}</span>
+                <span class="font-bold text-slate-700">Field ${fieldNumber}</span>
                 <button type="button" onclick="this.closest('.form-field-container').remove()" class="text-red-500 hover:text-red-700">
                     <i class="fas fa-trash"></i>
                 </button>
@@ -619,6 +629,17 @@ const AdminForms = {
             </div>
         `;
         fieldsList.appendChild(fieldEl);
+        
+        // Ensure the field is visible (in case step 2 was hidden)
+        const step2Div = document.getElementById('form-step-2');
+        if (step2Div && step2Div.classList.contains('hidden')) {
+            // If we're adding a field but step 2 is hidden, switch to step 2
+            this.currentStep = 2;
+            this.updateFormStepUI();
+        }
+        
+        // Scroll to the newly added field
+        fieldEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     },
     
     /**
@@ -683,7 +704,7 @@ const AdminForms = {
             // Use children instead of querySelectorAll with invalid selector
             for (let index = 0; index < fieldsList.children.length; index++) {
                 const fieldEl = fieldsList.children[index];
-                const fieldId = fieldEl.querySelector('input[type="hidden"]')?.value;
+                const fieldId = fieldEl.querySelector('.field-id')?.value || fieldEl.querySelector('input[type="hidden"]')?.value;
                 const label = fieldEl.querySelector('.field-label')?.value?.trim();
                 const fieldType = fieldEl.querySelector('.field-type')?.value;
                 const required = fieldEl.querySelector('.field-required')?.checked || false;
@@ -750,7 +771,7 @@ const AdminForms = {
                 data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
                 DB.db.collection('forms').doc(formId).update(data)
                     .then(() => {
-                        Toast.success('Form updated successfully');
+                Toast.success('Form updated successfully');
                     })
                     .catch((error) => {
                         console.error('Error updating form:', error);
@@ -784,8 +805,8 @@ const AdminForms = {
                     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
                 })
                     .then((docRef) => {
-                        savedFormId = docRef.id;
-                        Toast.success('Form created successfully');
+                savedFormId = docRef.id;
+                Toast.success('Form created successfully');
                         
                         // Update the optimistic item with real ID
                         const tempIndex = this.forms.findIndex(f => f.id === newForm.id);
@@ -1038,9 +1059,9 @@ const AdminForms = {
             DB.db.collection('forms').doc(formId).delete()
                 .then(() => {
                     // Clear caches
-                    DB.invalidateCache('form');
-                    Cache.clear('cache_forms_list');
-                    
+            DB.invalidateCache('form');
+            Cache.clear('cache_forms_list');
+            
                     // Show success message
                     Toast.success(`Form "${formTitle}" deleted successfully. It will be removed from all users' pending missions shortly.`);
                     
@@ -1053,7 +1074,7 @@ const AdminForms = {
                     // Rollback optimistic update on error
                     if (operationId) {
                         OptimisticUI.rollback(operationId, () => {
-                            this.render();
+            this.render();
                         });
                     }
                     
@@ -1145,21 +1166,24 @@ const AdminForms = {
                 directory = directoryResult?.data || {};
             }
             
-            // Fetch user data for all userIds
-            await Promise.all(userIds.map(async (userId) => {
+            // Fetch user data for all userIds - use batch loading for optimization
+            // First, populate from cache
+            userIds.forEach(userId => {
                 if (directory[userId]) {
                     usersMap.set(userId, directory[userId]);
-                } else {
-                    // Fallback: fetch from Firestore if not in cache
-                    try {
-                        const user = await DB.getUser(userId, false);
-                        if (user) {
-                            usersMap.set(userId, user);
-                        }
-                    } catch (error) {
-                    }
                 }
-            }));
+            });
+            
+            // Identify which users are missing from cache
+            const missingUserIds = userIds.filter(userId => !usersMap.has(userId));
+            
+            // Batch load missing users from Firestore
+            if (missingUserIds.length > 0) {
+                const batchUsersMap = await DB.getUsersBatch(missingUserIds);
+                batchUsersMap.forEach((user, userId) => {
+                    usersMap.set(userId, user);
+                });
+            }
             
             // Store submissions data
             this.currentFormSubmissions = {

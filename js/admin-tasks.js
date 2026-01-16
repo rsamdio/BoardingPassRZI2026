@@ -834,7 +834,7 @@ const AdminTasks = {
                 data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
                 DB.db.collection('tasks').doc(taskId).update(data)
                     .then(() => {
-                        Toast.success('Task updated successfully');
+                Toast.success('Task updated successfully');
                     })
                     .catch((error) => {
                         console.error('Error updating task:', error);
@@ -863,8 +863,8 @@ const AdminTasks = {
                 data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
                 DB.db.collection('tasks').add(data)
                     .then((docRef) => {
-                        savedTaskId = docRef.id;
-                        Toast.success('Task created successfully');
+                savedTaskId = docRef.id;
+                Toast.success('Task created successfully');
                         
                         // Update the optimistic item with real ID
                         const tempIndex = this.tasks.findIndex(t => t.id === newTask.id);
@@ -971,21 +971,24 @@ const AdminTasks = {
                 directory = directoryResult?.data || {};
             }
             
-            // Fetch user data for all userIds
-            await Promise.all(userIds.map(async (userId) => {
+            // Fetch user data for all userIds - use batch loading for optimization
+            // First, populate from cache
+            userIds.forEach(userId => {
                 if (directory[userId]) {
                     usersMap.set(userId, directory[userId]);
-                } else {
-                    // Fallback: fetch from Firestore if not in cache
-                    try {
-                        const user = await DB.getUser(userId, false);
-                        if (user) {
-                            usersMap.set(userId, user);
-                        }
-                    } catch (error) {
-                    }
                 }
-            }));
+            });
+            
+            // Identify which users are missing from cache
+            const missingUserIds = userIds.filter(userId => !usersMap.has(userId));
+            
+            // Batch load missing users from Firestore
+            if (missingUserIds.length > 0) {
+                const batchUsersMap = await DB.getUsersBatch(missingUserIds);
+                batchUsersMap.forEach((user, userId) => {
+                    usersMap.set(userId, user);
+                });
+            }
             
             // Store submissions data
             this.currentTaskSubmissions = {
@@ -1306,9 +1309,9 @@ const AdminTasks = {
             DB.db.collection('tasks').doc(taskId).delete()
                 .then(() => {
                     // Clear caches
-                    DB.invalidateCache('task');
-                    Cache.clear(Cache.keys.taskList());
-                    
+            DB.invalidateCache('task');
+            Cache.clear(Cache.keys.taskList());
+            
                     // Show success message
                     Toast.success(`Task "${taskTitle}" deleted successfully. It will be removed from all users' pending missions shortly.`);
                     
@@ -1321,7 +1324,7 @@ const AdminTasks = {
                     // Rollback optimistic update on error
                     if (operationId) {
                         OptimisticUI.rollback(operationId, () => {
-                            this.render();
+            this.render();
                         });
                     }
                     

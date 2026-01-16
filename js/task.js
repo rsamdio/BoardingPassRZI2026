@@ -4,6 +4,17 @@ const Task = {
     selectedFile: null,
     
     async openUploadModal(taskId) {
+        // If stuck in submitting state, reset it (safety check)
+        if (this._submitting) {
+            this._submitting = false;
+        }
+        
+        // Close any existing modal first
+        const existingModal = document.querySelector('[id^="modal-"]:not(.hidden)');
+        if (existingModal) {
+            closeModal(existingModal.id);
+        }
+        
         const task = await DB.getTask(taskId);
         if (!task) {
             showToast('Task not found', 'error');
@@ -25,7 +36,23 @@ const Task = {
         document.getElementById('file-input').value = '';
         this.selectedFile = null;
         
-        document.getElementById('modal-upload').classList.remove('hidden');
+        const modal = document.getElementById('modal-upload');
+        if (modal) {
+            // CRITICAL: Reset close button state before showing modal
+            const closeBtn = modal.querySelector('button[onclick*="closeModal"]');
+            if (closeBtn) {
+                closeBtn.style.pointerEvents = 'auto';
+            }
+            
+            // Reset submit button state
+            const submitBtn = document.getElementById('submit-file-btn');
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = 'Upload File';
+            }
+            
+            modal.classList.remove('hidden');
+        }
     },
     
     handleFileSelect(input) {
@@ -126,8 +153,19 @@ const Task = {
                 status: 'pending'
             };
             
+            // Prevent double submission
+            if (this._submitting) {
+                return;
+            }
+            
+            this._submitting = true;
+            
+            // CRITICAL: Capture task ID before closing modal (to avoid null reference in async handlers)
+            const taskId = this.currentTask.id;
+            
+            
             // IMMEDIATE UX: Show submitting state on card BEFORE database write
-            SubmissionHelpers.showSubmittingState(this.currentTask.id, 'task');
+            SubmissionHelpers.showSubmittingState(taskId, 'task');
             
             // Update button text
             if (submitBtn) {
@@ -139,11 +177,12 @@ const Task = {
             await SubmissionHelpers.optimisticallyRemoveFromPending(
                 Auth.currentUser.uid,
                 'task',
-                this.currentTask.id
+                taskId
             );
             
             // Close modal immediately (don't wait for database)
             closeModal('modal-upload');
+            
             
             // Show success toast immediately
             Toast.success('Submission successful! Waiting for approval.');
@@ -151,22 +190,46 @@ const Task = {
             // Submit to database (async - don't wait for Cloud Function)
             DB.submitTask(submission)
                 .then(() => {
+                    
                     // Mark as completed locally
                     CompletionManager.markCompletedLocally(
                         Auth.currentUser.uid,
                         'task',
-                        this.currentTask.id,
-                        {
-                            status: 'pending',
-                            submittedAt: Date.now()
-                        }
-                    );
+                        taskId,
+                {
+                    status: 'pending',
+                    submittedAt: Date.now()
+                }
+            );
+            
+                    this._submitting = false;
+                    this.currentTask = null;
+                    
+                    // Re-enable close button in case modal is still open
+                    const closeBtn = document.querySelector('#modal-upload button[onclick*="closeModal"]');
+                    if (closeBtn) {
+                        closeBtn.style.pointerEvents = 'auto';
+                    }
                 })
                 .catch(error => {
+                    
                     console.error('Error submitting task:', error);
                     Toast.error('Failed to submit task. Please try again.');
                     // Rollback optimistic update on error
-                    SubmissionHelpers.rollbackSubmission(this.currentTask.id, 'task');
+                    SubmissionHelpers.rollbackSubmission(taskId, 'task');
+                    
+                    this._submitting = false;
+                    
+                    // Re-enable close button and submit button
+                    const closeBtn = document.querySelector('#modal-upload button[onclick*="closeModal"]');
+                    if (closeBtn) {
+                        closeBtn.style.pointerEvents = 'auto';
+                    }
+                    const submitBtn = document.getElementById('submit-file-btn');
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = 'Upload File';
+                    }
                 });
         } catch (error) {
             // Re-enable button on error
@@ -180,6 +243,18 @@ const Task = {
     },
     
     async openFormModal(taskId) {
+        
+        // If stuck in submitting state, reset it (safety check)
+        if (this._submitting) {
+            this._submitting = false;
+        }
+        
+        // Close any existing modal first
+        const existingModal = document.querySelector('[id^="modal-"]:not(.hidden)');
+        if (existingModal) {
+            closeModal(existingModal.id);
+        }
+        
         const task = await DB.getTask(taskId);
         if (!task) {
             showToast('Task not found', 'error');
@@ -241,7 +316,21 @@ const Task = {
             });
         }
         
-        document.getElementById('modal-task-form').classList.remove('hidden');
+        // CRITICAL: Reset close button state before showing modal
+        const modal = document.getElementById('modal-task-form');
+        const closeBtn = modal.querySelector('button[onclick*="closeModal"]');
+        if (closeBtn) {
+            closeBtn.style.pointerEvents = 'auto';
+        }
+        
+        // Reset submit button state
+        const submitBtn = modal.querySelector('button[type="submit"]');
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = 'Submit';
+        }
+        
+        modal.classList.remove('hidden');
     },
     
     async submitTaskForm(event) {
@@ -249,12 +338,20 @@ const Task = {
         
         if (!this.currentTask) return;
         
+        
+        // Prevent double submission
+        if (this._submitting) {
+            return;
+        }
+        
         // Check if already submitting
         const submitBtn = event.target.querySelector('button[type="submit"]') || 
                          document.querySelector('#modal-task-form button[type="submit"]');
         if (submitBtn && submitBtn.disabled) {
             return; // Already submitting
         }
+        
+        this._submitting = true;
         
         // Check if task can be submitted
         const canSubmit = await CompletionManager.canSubmitTask(Auth.currentUser.uid, this.currentTask.id);
@@ -269,34 +366,88 @@ const Task = {
             submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Submitting...';
         }
         
+        // CRITICAL: Collect FormData BEFORE disabling fields
+        // Disabled form fields are NOT included in FormData!
+        const formData = new FormData(event.target);
+        const formDataObj = {};
+        formData.forEach((value, key) => {
+            formDataObj[key] = value;
+        });
+        
+        
+        // Also manually collect from all inputs (FormData might miss some fields)
+        // Do this BEFORE disabling fields to ensure we capture all values
+        const allInputs = event.target.querySelectorAll('input, select, textarea');
+        allInputs.forEach((input) => {
+            const fieldId = input.name || input.id;
+            if (!fieldId) {
+                console.warn('Form input missing name/id attribute:', input);
+                return;
+            }
+            
+            // Handle different input types
+            if (input.type === 'checkbox') {
+                // Checkboxes: only include if checked
+                if (input.checked) {
+                    if (formDataObj[fieldId]) {
+                        // Multiple checkboxes with same name
+                        if (Array.isArray(formDataObj[fieldId])) {
+                            formDataObj[fieldId].push(input.value);
+                        } else {
+                            formDataObj[fieldId] = [formDataObj[fieldId], input.value];
+                        }
+                    } else {
+                        formDataObj[fieldId] = input.value || true;
+                    }
+                }
+            } else if (input.type === 'radio') {
+                // Radio buttons: only include if checked
+                if (input.checked) {
+                    formDataObj[fieldId] = input.value;
+                }
+            } else {
+                // Text, select, textarea, etc.
+                if (!(fieldId in formDataObj) || formDataObj[fieldId] === '') {
+                    formDataObj[fieldId] = input.value;
+                }
+            }
+        });
+        
+        
+        // Validate that we have form data
+        const formDataKeys = Object.keys(formDataObj);
+        if (formDataKeys.length === 0) {
+            throw new Error('No form data collected. Please ensure all form fields have valid names and are properly filled.');
+        }
+        
         // Prevent modal close
         const closeBtn = document.querySelector('#modal-task-form button[onclick*="closeModal"]');
         if (closeBtn) closeBtn.style.pointerEvents = 'none';
         
-        // Disable form fields
+        // Disable form fields AFTER collecting all form data
         const formFields = event.target.querySelectorAll('input, select, textarea');
         formFields.forEach(field => field.disabled = true);
         
         try {
-            const formData = new FormData(event.target);
-            const formDataObj = {};
-            formData.forEach((value, key) => {
-                formDataObj[key] = value;
-            });
+            
+            // CRITICAL: Capture task ID and title before closing modal (to avoid null reference in async handlers)
+            const taskId = this.currentTask.id;
+            const taskTitle = this.currentTask.title;
             
             // Create submission
             const submission = {
                 userId: Auth.currentUser.uid,
                 userName: Auth.currentUser.name,
-                taskId: this.currentTask.id,
-                taskTitle: this.currentTask.title,
+                taskId: taskId,
+                taskTitle: taskTitle,
                 type: 'form',
-                formData: formDataObj,
+                formData: formDataObj, // This should contain the actual form field responses
                 status: 'pending'
             };
             
+            
             // IMMEDIATE UX: Show submitting state on card BEFORE database write
-            SubmissionHelpers.showSubmittingState(this.currentTask.id, 'task');
+            SubmissionHelpers.showSubmittingState(taskId, 'task');
             
             // Update button text
             if (submitBtn) {
@@ -308,11 +459,12 @@ const Task = {
             await SubmissionHelpers.optimisticallyRemoveFromPending(
                 Auth.currentUser.uid,
                 'task',
-                this.currentTask.id
+                taskId
             );
             
             // Close modal immediately (don't wait for database)
             closeModal('modal-task-form');
+            
             
             // Show success toast immediately
             Toast.success('Submission successful! Waiting for approval.');
@@ -320,22 +472,46 @@ const Task = {
             // Submit to database (async - don't wait for Cloud Function)
             DB.submitTask(submission)
                 .then(() => {
+                    
                     // Mark as completed locally
                     CompletionManager.markCompletedLocally(
                         Auth.currentUser.uid,
                         'task',
-                        this.currentTask.id,
-                        {
-                            status: 'pending',
-                            submittedAt: Date.now()
-                        }
-                    );
+                        taskId,
+                {
+                    status: 'pending',
+                    submittedAt: Date.now()
+                }
+            );
+            
+                    this._submitting = false;
+                    this.currentTask = null;
+                    
+                    // Re-enable close button in case modal is still open
+                    const closeBtn = document.querySelector('#modal-task-form button[onclick*="closeModal"]');
+                    if (closeBtn) {
+                        closeBtn.style.pointerEvents = 'auto';
+                    }
                 })
                 .catch(error => {
+                    
                     console.error('Error submitting task:', error);
                     Toast.error('Failed to submit task. Please try again.');
                     // Rollback optimistic update on error
-                    SubmissionHelpers.rollbackSubmission(this.currentTask.id, 'task');
+                    SubmissionHelpers.rollbackSubmission(taskId, 'task');
+                    
+                    this._submitting = false;
+                    
+                    // Re-enable close button and submit button
+                    const closeBtn = document.querySelector('#modal-task-form button[onclick*="closeModal"]');
+                    if (closeBtn) {
+                        closeBtn.style.pointerEvents = 'auto';
+                    }
+                    const submitBtn = document.querySelector('#modal-task-form button[type="submit"]');
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = 'Submit';
+                    }
                 });
             
             showToast('✓ Form submitted successfully! Your submission is pending review.', 'success');

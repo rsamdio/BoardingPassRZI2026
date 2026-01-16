@@ -199,29 +199,36 @@ const UI = {
     setupRealtimeListeners() {
         if (!Auth.currentUser) return;
         
+        // Clean up existing listeners to prevent duplicates
+        if (this._realtimeListeners) {
+            this.cleanupRealtimeListeners();
+        }
+        
+        this._realtimeListeners = {};
         const userId = Auth.currentUser.uid;
         
         // Listen for pre-computed list updates (version changes trigger refresh)
         const pendingMetadataRef = DB.rtdb.ref(`cache/users/${userId}/pendingActivities/metadata`);
-        let lastPendingVersion = null;
+        // Restore last version from cache to prevent null on re-init
+        const cachedVersion = Cache.get(`pending_activities_version_${userId}`);
+        let lastPendingVersion = cachedVersion || null;
         let lastPendingTimestamp = null;
         
-        pendingMetadataRef.on('value', (snapshot) => {
+        const pendingMetadataListener = (snapshot) => {
             if (snapshot.exists()) {
                 const metadata = snapshot.val();
                 const currentVersion = metadata.version || 0;
                 const currentTimestamp = metadata.lastUpdated || 0;
                 
                 // Check if version changed (simplified - version is sufficient)
+                // Also handle first-time initialization (lastPendingVersion is null)
+                const isFirstTime = lastPendingVersion === null;
                 const versionChanged = lastPendingVersion !== null && lastPendingVersion !== currentVersion;
                 
-                if (versionChanged) {
+                if (isFirstTime || versionChanged) {
                     // Clear cache to force fresh fetch
                     const cacheKey = `rtdb_cache_cache_users_${userId}_pendingActivities_combined`;
                     Cache.clear(cacheKey);
-                    
-                    // Show subtle notification for real-time updates
-                    console.log(`[Real-time] Pending activities updated (v${lastPendingVersion} → v${currentVersion})`);
                     
                     // Refresh pending activities immediately
                     this.renderPendingActivities();
@@ -230,14 +237,35 @@ const UI = {
                 lastPendingVersion = currentVersion;
                 Cache.set(`pending_activities_version_${userId}`, currentVersion, 'SYSTEM');
             }
-        }, (error) => {
+        };
+        
+        pendingMetadataRef.on('value', pendingMetadataListener, (error) => {
             console.error('Error listening to pending activities updates:', error);
         });
         
+        this._realtimeListeners.pendingMetadata = { ref: pendingMetadataRef, listener: pendingMetadataListener };
+        
         // Listen directly to the combined list for immediate updates
-        // Simplified: Only track version changes, not hash comparison
+        // This handles the case where data appears for the first time (new user)
         const pendingListRef = DB.rtdb.ref(`cache/users/${userId}/pendingActivities/combined`);
-        pendingListRef.on('value', (snapshot) => {
+        let lastPendingListExists = false;
+        const pendingListListener = (snapshot) => {
+            const exists = snapshot.exists();
+            const dataCount = exists ? (Array.isArray(snapshot.val()) ? snapshot.val().length : Object.keys(snapshot.val() || {}).length) : 0;
+            
+            // If data just appeared (wasn't there before, now it is), trigger render
+            // This handles the new user case where cache is created after initial load
+            if (exists && !lastPendingListExists && dataCount > 0) {
+                // Clear cache to force fresh fetch
+                const cacheKey = `rtdb_cache_cache_users_${userId}_pendingActivities_combined`;
+                Cache.clear(cacheKey);
+                
+                // Trigger render immediately
+                this.renderPendingActivities();
+            }
+            
+            lastPendingListExists = exists;
+            
             if (snapshot.exists()) {
                 // Version-based change detection is handled by metadata listener above
                 // This listener is kept for redundancy but simplified
@@ -245,9 +273,13 @@ const UI = {
                 Cache.clear(cacheKey);
                 // Metadata listener will trigger renderPendingActivities
             }
-        }, (error) => {
+        };
+        
+        pendingListRef.on('value', pendingListListener, (error) => {
             console.error('Error listening to pending activities list:', error);
         });
+        
+        this._realtimeListeners.pendingList = { ref: pendingListRef, listener: pendingListListener };
         
         // Listen for completed activities updates
         const completedMetadataRef = DB.rtdb.ref(`cache/users/${userId}/completedActivities/metadata`);
@@ -350,8 +382,6 @@ const UI = {
                 const versionChanged = lastVersion !== null && lastVersion !== currentVersion;
                 
                 if (versionChanged) {
-                    console.log(`[Real-time] ${activityType} metadata updated (v${lastVersion} → v${currentVersion})`);
-                    
                     // Clear all pending activities cache keys to force fresh fetch
                     const cacheKey = `rtdb_cache_cache_users_${userId}_pendingActivities_combined`;
                     Cache.clear(cacheKey);
@@ -427,16 +457,11 @@ const UI = {
                     verifiedFiltered = filtered.filter(item => {
                         if (item.itemType === 'task' || item.taskId) {
                             const taskId = item.id || item.taskId;
-                            const exists = existingTaskIds.includes(taskId);
-                            if (!exists) {
-                                console.log(`[renderPendingActivities] Filtered out deleted task: ${taskId}`);
-                            }
-                            return exists;
+                            return existingTaskIds.includes(taskId);
                         }
                         return true; // Keep non-tasks
                     });
                 } catch (error) {
-                    console.warn('[renderPendingActivities] Failed to verify tasks, using original list:', error);
                     // Continue with original filtered list if verification fails
                 }
             }
@@ -1551,7 +1576,68 @@ const UI = {
     },
     
     closeModal(id) {
-        document.getElementById(id).classList.add('hidden');
+        const modal = document.getElementById(id);
+        if (modal) {
+            modal.classList.add('hidden');
+            
+            // Reset form state if it's a form modal
+            if (id === 'modal-task-form' || id === 'modal-survey-form') {
+                const form = modal.querySelector('form');
+                if (form) {
+                    form.reset();
+                    // Re-enable all form fields
+                    const formFields = form.querySelectorAll('input, select, textarea, button');
+                    formFields.forEach(field => {
+                        field.disabled = false;
+                        if (field.type === 'submit') {
+                            field.innerHTML = field.getAttribute('data-original-text') || 'Submit';
+                        }
+                    });
+                }
+                
+                // CRITICAL: Re-enable close button (it might have been disabled during submission)
+                const closeBtn = modal.querySelector('button[onclick*="closeModal"]');
+                if (closeBtn) {
+                    closeBtn.style.pointerEvents = 'auto';
+                }
+                
+                // ALWAYS reset submission state when modal is closed (force close)
+                // This prevents stuck modals if async handler fails or is slow
+                if (id === 'modal-task-form' && Task) {
+                    Task._submitting = false;
+                    Task.currentTask = null;
+                } else if (id === 'modal-survey-form' && Forms) {
+                    Forms._submitting = false;
+                    Forms.currentForm = null;
+                }
+            }
+            
+            // Also handle modal-upload close button
+            if (id === 'modal-upload') {
+                const closeBtn = modal.querySelector('button[onclick*="closeModal"]');
+                if (closeBtn) {
+                    closeBtn.style.pointerEvents = 'auto';
+                }
+                if (Task) {
+                    Task._submitting = false;
+                }
+            }
+        }
+    },
+    
+    /**
+     * Clean up real-time listeners to prevent duplicates
+     */
+    cleanupRealtimeListeners() {
+        if (!this._realtimeListeners) return;
+        
+        Object.values(this._realtimeListeners).forEach(({ ref, listener }) => {
+            if (ref && listener) {
+                ref.off('value', listener);
+            }
+        });
+        
+        this._realtimeListeners = null;
     },
     
     showToast(msg, type = 'success') {
@@ -2197,8 +2283,13 @@ function showLeaderboardModal() {
     UI.showLeaderboardModal();
 }
 
-function closeModal(id) {
+function closeModal(id, event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
     UI.closeModal(id);
+    return false;
 }
 
 // Toast is now handled by Toast module (toast.js)

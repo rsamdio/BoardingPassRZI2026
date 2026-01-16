@@ -25,7 +25,6 @@ const AdminApp = {
             const adminSnap = await adminRef.once('value');
             
             if (!adminSnap.exists()) {
-                console.log('Admin not found in RTDB, syncing...');
                 try {
                     await AdminAuth.syncAdminsToRTDB();
                 } catch (syncError) {
@@ -60,10 +59,34 @@ const AdminApp = {
             // Initialize dashboard
             await AdminDashboard.load();
             
+            // Pre-warm cache in background (non-blocking)
+            this.prewarmCache().catch(error => {
+                console.error('Error pre-warming cache:', error);
+                // Non-critical, continue anyway
+            });
+            
             this.initialized = true;
         } catch (error) {
             console.error('Error initializing AdminApp:', error);
             Toast.error('Failed to initialize admin dashboard: ' + error.message);
+        }
+    },
+    
+    /**
+     * Pre-warm cache by loading tasks, forms, and quizzes in background
+     * This improves cache hit rates during submission review
+     */
+    async prewarmCache() {
+        try {
+            // Load all tasks, forms, and quizzes in parallel (non-blocking)
+            // These will populate RTDB cache if not already present
+            await Promise.allSettled([
+                DB.getAllTasks().catch(() => {}),
+                DB.getAllForms().catch(() => {}),
+                DB.getAllQuizzes().catch(() => {})
+            ]);
+        } catch (error) {
+            // Non-critical - cache pre-warming failure shouldn't block app
         }
     }
 };

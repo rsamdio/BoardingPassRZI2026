@@ -987,6 +987,24 @@ const DB = {
     },
     
     async getQuiz(quizId) {
+        // Try RTDB cache first (adminCache/quizzes) to avoid Firestore reads
+        try {
+            const cacheRef = this.rtdb.ref('adminCache/quizzes');
+            const cacheSnap = await cacheRef.once('value');
+            if (cacheSnap.exists()) {
+                const cacheData = cacheSnap.val();
+                const lastUpdated = cacheData.lastUpdated || 0;
+                const now = Date.now();
+                // Check if cache is fresh (within 10 minutes)
+                if (now - lastUpdated < 10 * 60 * 1000 && cacheData[quizId]) {
+                    return { id: quizId, ...cacheData[quizId] };
+                }
+            }
+        } catch (error) {
+            // Cache read failed, fall through to Firestore
+        }
+        
+        // Fallback to Firestore if cache miss or stale
         const doc = await this.db.collection('quizzes').doc(quizId).get();
         return doc.exists ? { id: doc.id, ...doc.data() } : null;
     },
@@ -1120,6 +1138,32 @@ const DB = {
     },
     
     async getTask(taskId) {
+        // Try RTDB cache first (adminCache/tasks) to avoid Firestore reads
+        try {
+            const cacheRef = this.rtdb.ref('adminCache/tasks');
+            const cacheSnap = await cacheRef.once('value');
+            if (cacheSnap.exists()) {
+                const cacheData = cacheSnap.val();
+                const lastUpdated = cacheData.lastUpdated || 0;
+                const now = Date.now();
+                // Check if cache is fresh (within 10 minutes)
+                if (now - lastUpdated < 10 * 60 * 1000 && cacheData[taskId]) {
+                    const cachedTask = { id: taskId, ...cacheData[taskId] };
+                    
+                    // FIX: If task is form type but formFields are missing from cache, fall back to Firestore
+                    // This handles cases where cache was updated before formFields were added to cache logic
+                    if (cachedTask.type === 'form' && (!cachedTask.formFields || !Array.isArray(cachedTask.formFields) || cachedTask.formFields.length === 0)) {
+                        // Fall through to Firestore to get complete data including formFields
+                    } else {
+                        return cachedTask;
+                    }
+                }
+            }
+        } catch (error) {
+            // Cache read failed, fall through to Firestore
+        }
+        
+        // Fallback to Firestore if cache miss or stale
         const doc = await this.db.collection('tasks').doc(taskId).get();
         return doc.exists ? { id: doc.id, ...doc.data() } : null;
     },
@@ -1274,6 +1318,24 @@ const DB = {
     },
     
     async getForm(formId) {
+        // Try RTDB cache first (adminCache/forms) to avoid Firestore reads
+        try {
+            const cacheRef = this.rtdb.ref('adminCache/forms');
+            const cacheSnap = await cacheRef.once('value');
+            if (cacheSnap.exists()) {
+                const cacheData = cacheSnap.val();
+                const lastUpdated = cacheData.lastUpdated || 0;
+                const now = Date.now();
+                // Check if cache is fresh (within 10 minutes)
+                if (now - lastUpdated < 10 * 60 * 1000 && cacheData[formId]) {
+                    return { id: formId, ...cacheData[formId] };
+                }
+            }
+        } catch (error) {
+            // Cache read failed, fall through to Firestore
+        }
+        
+        // Fallback to Firestore if cache miss or stale
         try {
             const doc = await this.db.collection('forms').doc(formId).get();
             if (doc.exists) {
@@ -1625,6 +1687,310 @@ const DB = {
                          forms.reduce((sum, f) => sum + (f.points || 0), 0),
             lastUpdated: Date.now()
         };
+    },
+    
+    // Batch Operations for Optimization
+    
+    /**
+     * Batch get users by IDs (max 10 per batch due to Firestore 'in' operator limit)
+     * @param {string[]} userIds - Array of user IDs (will be deduplicated)
+     * @returns {Promise<Map<string, Object>>} Map of userId to user data
+     */
+    async getUsersBatch(userIds) {
+        if (!userIds || userIds.length === 0) {
+            return new Map();
+        }
+        
+        // Deduplicate IDs
+        const uniqueIds = [...new Set(userIds.filter(id => id))];
+        if (uniqueIds.length === 0) {
+            return new Map();
+        }
+        
+        const usersMap = new Map();
+        const batchSize = 10;
+        
+        // Process in batches
+        for (let i = 0; i < uniqueIds.length; i += batchSize) {
+            const batch = uniqueIds.slice(i, i + batchSize);
+            if (batch.length === 0) continue;
+            
+            try {
+                const snapshot = await this.db.collection('users')
+                    .where(firebase.firestore.FieldPath.documentId(), 'in', batch)
+                    .get();
+                
+                snapshot.docs.forEach(doc => {
+                    usersMap.set(doc.id, { uid: doc.id, ...doc.data() });
+                });
+            } catch (error) {
+                console.error(`Error loading batch of users:`, error, batch);
+                // Continue with next batch on error
+            }
+        }
+        
+        return usersMap;
+    },
+    
+    /**
+     * Batch get tasks by IDs (max 10 per batch due to Firestore 'in' operator limit)
+     * Uses RTDB cache first, falls back to Firestore batch read
+     * @param {string[]} taskIds - Array of task IDs (will be deduplicated)
+     * @returns {Promise<Map<string, Object>>} Map of taskId to task data
+     */
+    async getTasksBatch(taskIds) {
+        if (!taskIds || taskIds.length === 0) {
+            return new Map();
+        }
+        
+        // Deduplicate IDs
+        const uniqueIds = [...new Set(taskIds.filter(id => id))];
+        if (uniqueIds.length === 0) {
+            return new Map();
+        }
+        
+        const tasksMap = new Map();
+        
+        // Try RTDB cache first for each task
+        const cachePromises = uniqueIds.map(async (taskId) => {
+            try {
+                const cacheRef = this.rtdb.ref('adminCache/tasks');
+                const cacheSnap = await cacheRef.once('value');
+                if (cacheSnap.exists()) {
+                    const cacheData = cacheSnap.val();
+                    const lastUpdated = cacheData.lastUpdated || 0;
+                    const now = Date.now();
+                    if (now - lastUpdated < 10 * 60 * 1000 && cacheData[taskId]) {
+                        return { id: taskId, data: { id: taskId, ...cacheData[taskId] } };
+                    }
+                }
+            } catch (error) {
+                // Cache read failed, will fall back to Firestore
+            }
+            return { id: taskId, data: null };
+        });
+        
+        const cacheResults = await Promise.all(cachePromises);
+        const missingIds = cacheResults
+            .filter(r => !r.data)
+            .map(r => r.id);
+        
+        // Add cached results to map
+        cacheResults.forEach(r => {
+            if (r.data) {
+                tasksMap.set(r.id, r.data);
+            }
+        });
+        
+        // Batch load missing tasks from Firestore
+        if (missingIds.length > 0) {
+            const batchSize = 10;
+            for (let i = 0; i < missingIds.length; i += batchSize) {
+                const batch = missingIds.slice(i, i + batchSize);
+                if (batch.length === 0) continue;
+                
+                try {
+                    const snapshot = await this.db.collection('tasks')
+                        .where(firebase.firestore.FieldPath.documentId(), 'in', batch)
+                        .get();
+                    
+                    snapshot.docs.forEach(doc => {
+                        tasksMap.set(doc.id, { id: doc.id, ...doc.data() });
+                    });
+                } catch (error) {
+                    console.error(`Error loading batch of tasks:`, error, batch);
+                    // Continue with next batch on error
+                }
+            }
+        }
+        
+        return tasksMap;
+    },
+    
+    /**
+     * Batch get forms by IDs (max 10 per batch due to Firestore 'in' operator limit)
+     * Uses RTDB cache first, falls back to Firestore batch read
+     * @param {string[]} formIds - Array of form IDs (will be deduplicated)
+     * @returns {Promise<Map<string, Object>>} Map of formId to form data
+     */
+    async getFormsBatch(formIds) {
+        if (!formIds || formIds.length === 0) {
+            return new Map();
+        }
+        
+        // Deduplicate IDs
+        const uniqueIds = [...new Set(formIds.filter(id => id))];
+        if (uniqueIds.length === 0) {
+            return new Map();
+        }
+        
+        const formsMap = new Map();
+        
+        // Try RTDB cache first for each form
+        const cachePromises = uniqueIds.map(async (formId) => {
+            try {
+                const cacheRef = this.rtdb.ref('adminCache/forms');
+                const cacheSnap = await cacheRef.once('value');
+                if (cacheSnap.exists()) {
+                    const cacheData = cacheSnap.val();
+                    const lastUpdated = cacheData.lastUpdated || 0;
+                    const now = Date.now();
+                    if (now - lastUpdated < 10 * 60 * 1000 && cacheData[formId]) {
+                        return { id: formId, data: { id: formId, ...cacheData[formId] } };
+                    }
+                }
+            } catch (error) {
+                // Cache read failed, will fall back to Firestore
+            }
+            return { id: formId, data: null };
+        });
+        
+        const cacheResults = await Promise.all(cachePromises);
+        const missingIds = cacheResults
+            .filter(r => !r.data)
+            .map(r => r.id);
+        
+        // Add cached results to map
+        cacheResults.forEach(r => {
+            if (r.data) {
+                formsMap.set(r.id, r.data);
+            }
+        });
+        
+        // Batch load missing forms from Firestore
+        if (missingIds.length > 0) {
+            const batchSize = 10;
+            for (let i = 0; i < missingIds.length; i += batchSize) {
+                const batch = missingIds.slice(i, i + batchSize);
+                if (batch.length === 0) continue;
+                
+                try {
+                    const snapshot = await this.db.collection('forms')
+                        .where(firebase.firestore.FieldPath.documentId(), 'in', batch)
+                        .get();
+                    
+                    snapshot.docs.forEach(doc => {
+                        formsMap.set(doc.id, { id: doc.id, ...doc.data() });
+                    });
+                } catch (error) {
+                    console.error(`Error loading batch of forms:`, error, batch);
+                    // Continue with next batch on error
+                }
+            }
+        }
+        
+        return formsMap;
+    },
+    
+    /**
+     * Batch load full submissions from Firestore (max 10 per batch)
+     * Searches across submissions, formSubmissions, and quizSubmissions collections
+     * @param {string[]} submissionIds - Array of submission IDs (will be deduplicated)
+     * @returns {Promise<Map<string, Object>>} Map of submissionId to submission data
+     */
+    async loadFullSubmissionsBatch(submissionIds) {
+        if (!submissionIds || submissionIds.length === 0) {
+            return new Map();
+        }
+        
+        // Deduplicate IDs
+        const uniqueIds = [...new Set(submissionIds.filter(id => id))];
+        if (uniqueIds.length === 0) {
+            return new Map();
+        }
+        
+        const submissionsMap = new Map();
+        const batchSize = 10;
+        
+        // Process in batches
+        for (let i = 0; i < uniqueIds.length; i += batchSize) {
+            const batch = uniqueIds.slice(i, i + batchSize);
+            if (batch.length === 0) continue;
+            
+            try {
+                // Try submissions collection first
+                const submissionsSnapshot = await this.db.collection('submissions')
+                    .where(firebase.firestore.FieldPath.documentId(), 'in', batch)
+                    .get();
+                
+                submissionsSnapshot.docs.forEach(doc => {
+                    submissionsMap.set(doc.id, { id: doc.id, ...doc.data() });
+                });
+                
+                // Check which IDs weren't found in submissions
+                const foundIds = new Set(submissionsSnapshot.docs.map(d => d.id));
+                const missingIds = batch.filter(id => !foundIds.has(id));
+                
+                if (missingIds.length > 0) {
+                    // Try formSubmissions collection
+                    const formSubmissionsSnapshot = await this.db.collection('formSubmissions')
+                        .where(firebase.firestore.FieldPath.documentId(), 'in', missingIds)
+                        .get();
+                    
+                    formSubmissionsSnapshot.docs.forEach(doc => {
+                        submissionsMap.set(doc.id, { id: doc.id, ...doc.data() });
+                    });
+                    
+                    // Check which IDs still weren't found
+                    const formFoundIds = new Set(formSubmissionsSnapshot.docs.map(d => d.id));
+                    const stillMissingIds = missingIds.filter(id => !formFoundIds.has(id));
+                    
+                    if (stillMissingIds.length > 0) {
+                        // Try quizSubmissions collection
+                        const quizSubmissionsSnapshot = await this.db.collection('quizSubmissions')
+                            .where(firebase.firestore.FieldPath.documentId(), 'in', stillMissingIds)
+                            .get();
+                        
+                        quizSubmissionsSnapshot.docs.forEach(doc => {
+                            submissionsMap.set(doc.id, { id: doc.id, ...doc.data() });
+                        });
+                    }
+                }
+            } catch (error) {
+                console.error(`Error loading batch of submissions:`, error, batch);
+                // Continue with next batch on error
+            }
+        }
+        
+        return submissionsMap;
+    },
+    
+    /**
+     * Batch update submissions using Firestore batch writes (max 500 operations per batch)
+     * @param {Array<{id: string, collection: string, data: Object}>} updates - Array of update objects
+     * @returns {Promise<void>}
+     */
+    async batchUpdateSubmissions(updates) {
+        if (!updates || updates.length === 0) {
+            return;
+        }
+        
+        const batchSize = 500; // Firestore batch write limit
+        
+        // Process in batches
+        for (let i = 0; i < updates.length; i += batchSize) {
+            const batch = updates.slice(i, i + batchSize);
+            if (batch.length === 0) continue;
+            
+            try {
+                const firestoreBatch = this.db.batch();
+                
+                batch.forEach(update => {
+                    if (!update.id || !update.collection || !update.data) {
+                        console.warn('Invalid update object:', update);
+                        return;
+                    }
+                    
+                    const docRef = this.db.collection(update.collection).doc(update.id);
+                    firestoreBatch.update(docRef, update.data);
+                });
+                
+                await firestoreBatch.commit();
+            } catch (error) {
+                console.error(`Error in batch update:`, error, batch);
+                throw error; // Re-throw to let caller handle
+            }
+        }
     },
     
     // Invalidate caches when data changes
