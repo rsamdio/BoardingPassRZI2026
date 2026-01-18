@@ -866,6 +866,9 @@ const AdminTasks = {
                 savedTaskId = docRef.id;
                 Toast.success('Task created successfully');
                         
+                        // Invalidate memory cache (new task, clear all task cache)
+                        MemoryCache.clearPrefix('task:');
+                        
                         // Update the optimistic item with real ID
                         const tempIndex = this.tasks.findIndex(t => t.id === newTask.id);
                         if (tempIndex !== -1) {

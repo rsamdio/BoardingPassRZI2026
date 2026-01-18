@@ -983,6 +983,9 @@ const AdminQuizzes = {
                 savedQuizId = docRef.id;
                 Toast.success('Quiz created successfully');
                         
+                        // Invalidate memory cache (new quiz, clear all quiz cache)
+                        MemoryCache.clearPrefix('quiz:');
+                        
                         // Update the optimistic item with real ID
                         const tempIndex = this.quizzes.findIndex(q => q.id === newQuiz.id);
                         if (tempIndex !== -1) {

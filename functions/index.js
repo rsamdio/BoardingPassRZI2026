@@ -199,6 +199,7 @@ async function updateAttendeeDirectoryCache() {
         .get();
     
     const directoryData = {};
+    const userCacheUpdates = {};
     
     usersSnapshot.forEach((doc) => {
       const data = doc.data();
@@ -211,7 +212,7 @@ async function updateAttendeeDirectoryCache() {
       if (!userPhotoURL && Object.keys(directoryData).length < 3) {
       }
       
-      directoryData[doc.id] = {
+      const userData = {
         uid: doc.id,
         email: data.email || null,
         name: userName,
@@ -223,14 +224,63 @@ async function updateAttendeeDirectoryCache() {
         photo: userPhotoURL, // Keep both for compatibility
         status: data.status || "active"
       };
+      
+      directoryData[doc.id] = userData;
+      
+      // Also prepare individual user cache data
+      userCacheUpdates[`attendeeCache/users/${doc.id}`] = {
+        ...userData,
+        role: data.role || "attendee",
+        lastUpdated: Date.now()
+      };
     });
     
     directoryData.lastUpdated = Date.now();
     
-    // Update RTDB cache
-    await rtdb.ref("attendeeCache/directory").set(directoryData);
+    // Update RTDB cache - directory and individual user caches
+    const updates = {
+      "attendeeCache/directory": directoryData,
+      ...userCacheUpdates
+    };
+    
+    await rtdb.ref().update(updates);
   } catch (error) {
     console.error("Error updating attendee directory cache:", error);
+    // Non-critical, don't throw
+  }
+}
+
+/**
+ * Update individual user data in RTDB cache
+ * Writes user data to attendeeCache/users/{userId} for fast client-side access
+ * @param {string} uid - User ID
+ * @param {Object} userData - User data from Firestore
+ */
+async function updateUserDataCache(uid, userData) {
+  try {
+    if (!uid || !userData) return;
+    
+    // Only cache attendee users
+    if (userData.role !== "attendee") return;
+    
+    const userCacheData = {
+      uid: uid,
+      name: userData.name || userData.displayName || null,
+      email: userData.email || null,
+      district: userData.district || null,
+      designation: userData.designation || null,
+      points: userData.points || 0,
+      photoURL: userData.photoURL || userData.photo || null,
+      photo: userData.photoURL || userData.photo || null, // Keep both for compatibility
+      status: userData.status || "active",
+      role: userData.role || "attendee",
+      lastUpdated: Date.now()
+    };
+    
+    // Write to RTDB cache
+    await rtdb.ref(`attendeeCache/users/${uid}`).set(userCacheData);
+  } catch (error) {
+    console.error(`Error updating user data cache for ${uid}:`, error);
     // Non-critical, don't throw
   }
 }
@@ -1577,6 +1627,14 @@ async function updateSubmissionLists(submissionId, submissionData, changeType) {
         }
       }
       
+      // Determine collection based on submission type
+      let collection = 'submissions'; // Default for task submissions
+      if (formId) {
+        collection = 'formSubmissions';
+      } else if (quizId) {
+        collection = 'quizSubmissions';
+      }
+      
       // Ensure status is always included and matches the byStatus path
       const finalStatus = status || submissionData.status || 'pending';
       updates[`cache/admin/submissions/metadata/${submissionId}`] = {
@@ -1595,7 +1653,8 @@ async function updateSubmissionLists(submissionId, submissionData, changeType) {
         status: finalStatus, // Always use the final status to ensure consistency with byStatus path
         submittedAt: submissionData.submittedAt?.toMillis?.() || 
                     (submissionData.submittedAt ? new Date(submissionData.submittedAt).getTime() : Date.now()),
-        points: submissionData.points || submissionData.pointsAwarded || 0
+        points: submissionData.points || submissionData.pointsAwarded || 0,
+        collection: collection // Collection hint for fast client-side loading
       };
     } else {
       updates[`cache/admin/submissions/metadata/${submissionId}`] = null;
@@ -1854,6 +1913,9 @@ exports.onUserUpdate = onDocumentUpdated(
       if (before.status !== after.status && after.status === 'active') {
         updates.push(updateUserActivityLists(uid));
       }
+      
+      // Always update user data cache when user is updated (for any changes)
+      updates.push(updateUserDataCache(uid, after));
 
       await Promise.all(updates);
       return null;
@@ -1887,6 +1949,8 @@ exports.onUserCreate = onDocumentCreated(
         updateUserCompletionStatusCache(uid),
         // Generate pre-computed activity lists for the new user
         updateUserActivityLists(uid),
+        // Cache user data in RTDB for fast client-side access
+        updateUserDataCache(uid, userData),
       ];
 
       if (userData.email) {

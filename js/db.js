@@ -300,7 +300,7 @@ const DB = {
     async getUser(uid, useCache = true) {
         const currentUser = this.getCurrentUser();
         
-        // Try localStorage cache first (free, instant)
+        // Try localStorage cache first (free, instant) - only for current user
         if (useCache && currentUser && uid === currentUser.uid) {
             const cached = Cache.get(Cache.keys.userData(uid));
             if (cached) {
@@ -308,10 +308,42 @@ const DB = {
             }
         }
         
+        // Try RTDB cache (attendeeCache/users/{uid}) - works for all users
+        if (useCache) {
+            try {
+                const cacheRef = this.rtdb.ref(`attendeeCache/users/${uid}`);
+                const cacheSnap = await cacheRef.once('value');
+                if (cacheSnap.exists()) {
+                    const cacheData = cacheSnap.val();
+                    const lastUpdated = cacheData.lastUpdated || 0;
+                    const now = Date.now();
+                    const staleThreshold = 15 * 60 * 1000; // 15 minutes (increased from 10)
+                    
+                    // Use cache if not stale
+                    if (now - lastUpdated < staleThreshold) {
+                        this._cacheMetrics.hits++;
+                        this._cacheMetrics.rtdbReads++;
+                        
+                        // Cache current user's data in localStorage for faster subsequent access
+                        if (currentUser && uid === currentUser.uid) {
+                            Cache.set(Cache.keys.userData(uid), cacheData, 'USER_DATA');
+                        }
+                        
+                        return cacheData;
+                    }
+                }
+            } catch (error) {
+                // RTDB read failed, fall through to Firestore
+                this._cacheMetrics.misses++;
+            }
+        }
+        
+        // Fallback to Firestore
+        this._cacheMetrics.firestoreReads++;
         const doc = await this.db.collection('users').doc(uid).get();
         const userData = doc.exists ? { uid: doc.id, ...doc.data() } : null;
         
-        // Cache current user's data
+        // Cache current user's data in localStorage
         if (userData && currentUser && uid === currentUser.uid) {
             Cache.set(Cache.keys.userData(uid), userData, 'USER_DATA');
         }
@@ -879,7 +911,7 @@ const DB = {
                 // Try new indexed cache first
                 const result = await this.readFromCache('activities/quizzes/list', {
                     useLocalStorage: false,
-                    ttl: 10 * 60 * 1000
+                    ttl: 15 * 60 * 1000 // 15 minutes (increased from 10)
                 });
                 
                 if (result.data && Array.isArray(result.data) && result.data.length > 0) {
@@ -887,7 +919,7 @@ const DB = {
                     const quizPromises = result.data.slice(0, 100).map(quizId => 
                         this.readFromCache(`activities/quizzes/byId/${quizId}`, {
                             useLocalStorage: false,
-                            ttl: 10 * 60 * 1000
+                            ttl: 15 * 60 * 1000 // 15 minutes (increased from 10)
                         })
                     );
                     const quizzes = await Promise.all(quizPromises);
@@ -904,7 +936,7 @@ const DB = {
                     const cacheData = cacheSnap.val();
                     const lastUpdated = cacheData.lastUpdated || 0;
                     const now = Date.now();
-                    const staleThreshold = 10 * 60 * 1000; // 10 minutes
+                    const staleThreshold = 15 * 60 * 1000; // 15 minutes (increased from 10)
                     
                     if (now - lastUpdated < staleThreshold) {
                         const quizzes = Object.keys(cacheData)
@@ -951,7 +983,7 @@ const DB = {
                 const cacheData = cacheSnap.val();
                 const lastUpdated = cacheData.lastUpdated || 0;
                 const now = Date.now();
-                const staleThreshold = 10 * 60 * 1000; // 10 minutes
+                const staleThreshold = 15 * 60 * 1000; // 15 minutes (increased from 10)
                 
                 // Use cache if not stale
                 if (now - lastUpdated < staleThreshold) {
@@ -987,26 +1019,72 @@ const DB = {
     },
     
     async getQuiz(quizId) {
-        // Try RTDB cache first (adminCache/quizzes) to avoid Firestore reads
-        try {
-            const cacheRef = this.rtdb.ref('adminCache/quizzes');
-            const cacheSnap = await cacheRef.once('value');
-            if (cacheSnap.exists()) {
-                const cacheData = cacheSnap.val();
-                const lastUpdated = cacheData.lastUpdated || 0;
-                const now = Date.now();
-                // Check if cache is fresh (within 10 minutes)
-                if (now - lastUpdated < 10 * 60 * 1000 && cacheData[quizId]) {
-                    return { id: quizId, ...cacheData[quizId] };
-                }
-            }
-        } catch (error) {
-            // Cache read failed, fall through to Firestore
+        // Try memory cache first (session-scoped, fastest)
+        const memoryKey = `quiz:${quizId}`;
+        const memoryCached = MemoryCache.get(memoryKey);
+        if (memoryCached) {
+            this._cacheMetrics.hits++;
+            return memoryCached;
         }
         
-        // Fallback to Firestore if cache miss or stale
-        const doc = await this.db.collection('quizzes').doc(quizId).get();
-        return doc.exists ? { id: doc.id, ...doc.data() } : null;
+        // Check for pending request (request deduplication)
+        const requestKey = `getQuiz:${quizId}`;
+        if (this._pendingRequests.has(requestKey)) {
+            // Return the same promise if request is already in flight
+            return this._pendingRequests.get(requestKey);
+        }
+        
+        // Create new request promise
+        const requestPromise = (async () => {
+            try {
+                // Try RTDB cache (adminCache/quizzes) to avoid Firestore reads
+                try {
+                    const cacheRef = this.rtdb.ref('adminCache/quizzes');
+                    const cacheSnap = await cacheRef.once('value');
+                    if (cacheSnap.exists()) {
+                        const cacheData = cacheSnap.val();
+                        const lastUpdated = cacheData.lastUpdated || 0;
+                        const now = Date.now();
+                        // Check if cache is fresh (within 10 minutes)
+                        if (now - lastUpdated < 10 * 60 * 1000 && cacheData[quizId]) {
+                            const cachedQuiz = { id: quizId, ...cacheData[quizId] };
+                            // If questions array is missing, fall through to Firestore to get full quiz
+                            if (cachedQuiz.questions && Array.isArray(cachedQuiz.questions) && cachedQuiz.questions.length > 0) {
+                                // Cache in memory for faster subsequent access
+                                MemoryCache.set(memoryKey, cachedQuiz, 15 * 60 * 1000); // 15 minutes TTL
+                                this._cacheMetrics.hits++;
+                                this._cacheMetrics.rtdbReads++;
+                                return cachedQuiz;
+                            }
+                            // Cache doesn't have questions, fall through to Firestore
+                        }
+                    }
+                } catch (error) {
+                    // Cache read failed, fall through to Firestore
+                }
+                
+                // Fallback to Firestore if cache miss, stale, or missing questions
+                this._cacheMetrics.misses++;
+                this._cacheMetrics.firestoreReads++;
+                const doc = await this.db.collection('quizzes').doc(quizId).get();
+                const quiz = doc.exists ? { id: doc.id, ...doc.data() } : null;
+                
+                // Cache in memory if found
+                if (quiz) {
+                    MemoryCache.set(memoryKey, quiz, 15 * 60 * 1000); // 15 minutes TTL
+                }
+                
+                return quiz;
+            } finally {
+                // Remove from pending requests when done
+                this._pendingRequests.delete(requestKey);
+            }
+        })();
+        
+        // Store pending request
+        this._pendingRequests.set(requestKey, requestPromise);
+        
+        return requestPromise;
     },
     
     async submitQuiz(quizData) {
@@ -1046,7 +1124,7 @@ const DB = {
                 // Try new indexed cache first
                 const result = await this.readFromCache('activities/tasks/list', {
                     useLocalStorage: false,
-                    ttl: 10 * 60 * 1000
+                    ttl: 15 * 60 * 1000 // 15 minutes (increased from 10)
                 });
                 
                 if (result.data && Array.isArray(result.data) && result.data.length > 0) {
@@ -1054,7 +1132,7 @@ const DB = {
                     const taskPromises = result.data.slice(0, 100).map(taskId => 
                         this.readFromCache(`activities/tasks/byId/${taskId}`, {
                             useLocalStorage: false,
-                            ttl: 10 * 60 * 1000
+                            ttl: 15 * 60 * 1000 // 15 minutes (increased from 10)
                         })
                     );
                     const tasks = await Promise.all(taskPromises);
@@ -1071,7 +1149,7 @@ const DB = {
                     const cacheData = cacheSnap.val();
                     const lastUpdated = cacheData.lastUpdated || 0;
                     const now = Date.now();
-                    const staleThreshold = 10 * 60 * 1000; // 10 minutes
+                    const staleThreshold = 15 * 60 * 1000; // 15 minutes (increased from 10)
                     
                     if (now - lastUpdated < staleThreshold) {
                         const tasks = Object.keys(cacheData)
@@ -1118,7 +1196,7 @@ const DB = {
                 const cacheData = cacheSnap.val();
                 const lastUpdated = cacheData.lastUpdated || 0;
                 const now = Date.now();
-                const staleThreshold = 10 * 60 * 1000; // 10 minutes
+                const staleThreshold = 15 * 60 * 1000; // 15 minutes (increased from 10)
                 
                 // Use cache if not stale
                 if (now - lastUpdated < staleThreshold) {
@@ -1138,34 +1216,75 @@ const DB = {
     },
     
     async getTask(taskId) {
-        // Try RTDB cache first (adminCache/tasks) to avoid Firestore reads
-        try {
-            const cacheRef = this.rtdb.ref('adminCache/tasks');
-            const cacheSnap = await cacheRef.once('value');
-            if (cacheSnap.exists()) {
-                const cacheData = cacheSnap.val();
-                const lastUpdated = cacheData.lastUpdated || 0;
-                const now = Date.now();
-                // Check if cache is fresh (within 10 minutes)
-                if (now - lastUpdated < 10 * 60 * 1000 && cacheData[taskId]) {
-                    const cachedTask = { id: taskId, ...cacheData[taskId] };
-                    
-                    // FIX: If task is form type but formFields are missing from cache, fall back to Firestore
-                    // This handles cases where cache was updated before formFields were added to cache logic
-                    if (cachedTask.type === 'form' && (!cachedTask.formFields || !Array.isArray(cachedTask.formFields) || cachedTask.formFields.length === 0)) {
-                        // Fall through to Firestore to get complete data including formFields
-                    } else {
-                        return cachedTask;
-                    }
-                }
-            }
-        } catch (error) {
-            // Cache read failed, fall through to Firestore
+        // Try memory cache first (session-scoped, fastest)
+        const memoryKey = `task:${taskId}`;
+        const memoryCached = MemoryCache.get(memoryKey);
+        if (memoryCached) {
+            this._cacheMetrics.hits++;
+            return memoryCached;
         }
         
-        // Fallback to Firestore if cache miss or stale
-        const doc = await this.db.collection('tasks').doc(taskId).get();
-        return doc.exists ? { id: doc.id, ...doc.data() } : null;
+        // Check for pending request (request deduplication)
+        const requestKey = `getTask:${taskId}`;
+        if (this._pendingRequests.has(requestKey)) {
+            // Return the same promise if request is already in flight
+            return this._pendingRequests.get(requestKey);
+        }
+        
+        // Create new request promise
+        const requestPromise = (async () => {
+            try {
+                // Try RTDB cache (adminCache/tasks) to avoid Firestore reads
+                try {
+                    const cacheRef = this.rtdb.ref('adminCache/tasks');
+                    const cacheSnap = await cacheRef.once('value');
+                    if (cacheSnap.exists()) {
+                        const cacheData = cacheSnap.val();
+                        const lastUpdated = cacheData.lastUpdated || 0;
+                        const now = Date.now();
+                        // Check if cache is fresh (within 10 minutes)
+                        if (now - lastUpdated < 10 * 60 * 1000 && cacheData[taskId]) {
+                            const cachedTask = { id: taskId, ...cacheData[taskId] };
+                            
+                            // FIX: If task is form type but formFields are missing from cache, fall back to Firestore
+                            // This handles cases where cache was updated before formFields were added to cache logic
+                            if (cachedTask.type === 'form' && (!cachedTask.formFields || !Array.isArray(cachedTask.formFields) || cachedTask.formFields.length === 0)) {
+                                // Fall through to Firestore to get complete data including formFields
+                            } else {
+                                // Cache in memory for faster subsequent access
+                                MemoryCache.set(memoryKey, cachedTask, 15 * 60 * 1000); // 15 minutes TTL
+                                this._cacheMetrics.hits++;
+                                this._cacheMetrics.rtdbReads++;
+                                return cachedTask;
+                            }
+                        }
+                    }
+                } catch (error) {
+                    // Cache read failed, fall through to Firestore
+                }
+                
+                // Fallback to Firestore if cache miss or stale
+                this._cacheMetrics.misses++;
+                this._cacheMetrics.firestoreReads++;
+                const doc = await this.db.collection('tasks').doc(taskId).get();
+                const task = doc.exists ? { id: doc.id, ...doc.data() } : null;
+                
+                // Cache in memory if found
+                if (task) {
+                    MemoryCache.set(memoryKey, task, 15 * 60 * 1000); // 15 minutes TTL
+                }
+                
+                return task;
+            } finally {
+                // Remove from pending requests when done
+                this._pendingRequests.delete(requestKey);
+            }
+        })();
+        
+        // Store pending request
+        this._pendingRequests.set(requestKey, requestPromise);
+        
+        return requestPromise;
     },
     
     async submitTask(submission) {
@@ -1226,7 +1345,7 @@ const DB = {
                 // Try new indexed cache first
                 const result = await this.readFromCache('activities/forms/list', {
                     useLocalStorage: false,
-                    ttl: 10 * 60 * 1000
+                    ttl: 15 * 60 * 1000 // 15 minutes (increased from 10)
                 });
                 
                 if (result.data && Array.isArray(result.data) && result.data.length > 0) {
@@ -1234,7 +1353,7 @@ const DB = {
                     const formPromises = result.data.slice(0, 100).map(formId => 
                         this.readFromCache(`activities/forms/byId/${formId}`, {
                             useLocalStorage: false,
-                            ttl: 10 * 60 * 1000
+                            ttl: 15 * 60 * 1000 // 15 minutes (increased from 10)
                         })
                     );
                     const forms = await Promise.all(formPromises);
@@ -1251,7 +1370,7 @@ const DB = {
                     const cacheData = cacheSnap.val();
                     const lastUpdated = cacheData.lastUpdated || 0;
                     const now = Date.now();
-                    const staleThreshold = 10 * 60 * 1000; // 10 minutes
+                    const staleThreshold = 15 * 60 * 1000; // 15 minutes (increased from 10)
                     
                     if (now - lastUpdated < staleThreshold) {
                         const forms = Object.keys(cacheData)
@@ -1298,7 +1417,7 @@ const DB = {
                 const cacheData = cacheSnap.val();
                 const lastUpdated = cacheData.lastUpdated || 0;
                 const now = Date.now();
-                const staleThreshold = 10 * 60 * 1000; // 10 minutes
+                const staleThreshold = 15 * 60 * 1000; // 15 minutes (increased from 10)
                 
                 // Use cache if not stale
                 if (now - lastUpdated < staleThreshold) {
@@ -1318,34 +1437,72 @@ const DB = {
     },
     
     async getForm(formId) {
-        // Try RTDB cache first (adminCache/forms) to avoid Firestore reads
-        try {
-            const cacheRef = this.rtdb.ref('adminCache/forms');
-            const cacheSnap = await cacheRef.once('value');
-            if (cacheSnap.exists()) {
-                const cacheData = cacheSnap.val();
-                const lastUpdated = cacheData.lastUpdated || 0;
-                const now = Date.now();
-                // Check if cache is fresh (within 10 minutes)
-                if (now - lastUpdated < 10 * 60 * 1000 && cacheData[formId]) {
-                    return { id: formId, ...cacheData[formId] };
-                }
-            }
-        } catch (error) {
-            // Cache read failed, fall through to Firestore
+        // Try memory cache first (session-scoped, fastest)
+        const memoryKey = `form:${formId}`;
+        const memoryCached = MemoryCache.get(memoryKey);
+        if (memoryCached) {
+            this._cacheMetrics.hits++;
+            return memoryCached;
         }
         
-        // Fallback to Firestore if cache miss or stale
-        try {
-            const doc = await this.db.collection('forms').doc(formId).get();
-            if (doc.exists) {
-                return { id: doc.id, ...doc.data() };
-            }
-            return null;
-        } catch (error) {
-            console.error('Error getting form:', error);
-            return null;
+        // Check for pending request (request deduplication)
+        const requestKey = `getForm:${formId}`;
+        if (this._pendingRequests.has(requestKey)) {
+            // Return the same promise if request is already in flight
+            return this._pendingRequests.get(requestKey);
         }
+        
+        // Create new request promise
+        const requestPromise = (async () => {
+            try {
+                // Try RTDB cache (adminCache/forms) to avoid Firestore reads
+                try {
+                    const cacheRef = this.rtdb.ref('adminCache/forms');
+                    const cacheSnap = await cacheRef.once('value');
+                    if (cacheSnap.exists()) {
+                        const cacheData = cacheSnap.val();
+                        const lastUpdated = cacheData.lastUpdated || 0;
+                        const now = Date.now();
+                        // Check if cache is fresh (within 10 minutes)
+                        if (now - lastUpdated < 10 * 60 * 1000 && cacheData[formId]) {
+                            const form = { id: formId, ...cacheData[formId] };
+                            // Cache in memory for faster subsequent access
+                            MemoryCache.set(memoryKey, form, 15 * 60 * 1000); // 15 minutes TTL
+                            this._cacheMetrics.hits++;
+                            this._cacheMetrics.rtdbReads++;
+                            return form;
+                        }
+                    }
+                } catch (error) {
+                    // Cache read failed, fall through to Firestore
+                }
+                
+                // Fallback to Firestore if cache miss or stale
+                this._cacheMetrics.misses++;
+                this._cacheMetrics.firestoreReads++;
+                try {
+                    const doc = await this.db.collection('forms').doc(formId).get();
+                    if (doc.exists) {
+                        const form = { id: doc.id, ...doc.data() };
+                        // Cache in memory if found
+                        MemoryCache.set(memoryKey, form, 15 * 60 * 1000); // 15 minutes TTL
+                        return form;
+                    }
+                    return null;
+                } catch (error) {
+                    console.error('Error getting form:', error);
+                    return null;
+                }
+            } finally {
+                // Remove from pending requests when done
+                this._pendingRequests.delete(requestKey);
+            }
+        })();
+        
+        // Store pending request
+        this._pendingRequests.set(requestKey, requestPromise);
+        
+        return requestPromise;
     },
     
     async submitForm(formSubmission) {
@@ -1651,7 +1808,7 @@ const DB = {
                     const cacheData = cacheSnap.val();
                     const lastUpdated = cacheData.lastUpdated || 0;
                     const now = Date.now();
-                    const staleThreshold = 10 * 60 * 1000; // 10 minutes
+                    const staleThreshold = 15 * 60 * 1000; // 15 minutes (increased from 10)
                     
                     // Use cache if not stale
                     if (now - lastUpdated < staleThreshold) {

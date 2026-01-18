@@ -42,6 +42,10 @@ const AdminUI = {
                 AdminForms.cleanup();
             }
             
+            // Clear memory cache when navigating away from admin panel (if leaving admin entirely)
+            // Note: We keep cache during admin panel navigation for performance
+            // Cache will be cleared on page unload or explicit logout
+            
             // Hide all views
             document.querySelectorAll('.view-content').forEach(el => {
                 el.classList.add('hidden');

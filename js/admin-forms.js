@@ -808,6 +808,9 @@ const AdminForms = {
                 savedFormId = docRef.id;
                 Toast.success('Form created successfully');
                         
+                        // Invalidate memory cache (new form, clear all form cache)
+                        MemoryCache.clearPrefix('form:');
+                        
                         // Update the optimistic item with real ID
                         const tempIndex = this.forms.findIndex(f => f.id === newForm.id);
                         if (tempIndex !== -1) {

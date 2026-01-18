@@ -55,6 +55,13 @@ const Quiz = {
     renderQuiz() {
         if (!this.currentQuiz) return;
         
+        // Ensure questions array exists
+        if (!this.currentQuiz.questions || !Array.isArray(this.currentQuiz.questions)) {
+            console.error('Quiz questions not found or invalid:', this.currentQuiz);
+            showToast('Quiz questions not available. Please try again.', 'error');
+            return;
+        }
+        
         document.getElementById('quiz-modal-title').textContent = this.currentQuiz.title;
         const contentEl = document.getElementById('quiz-content');
         contentEl.innerHTML = '';

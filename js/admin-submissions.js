@@ -287,6 +287,28 @@ const AdminSubmissions = {
      */
     async loadFullSubmission(submissionId) {
         try {
+            // Check metadata cache for collection hint (optimization: reduces from 3 reads to 1)
+            let collection = null;
+            try {
+                const metadataRef = DB.rtdb.ref(`cache/admin/submissions/metadata/${submissionId}`);
+                const metadataSnap = await metadataRef.once('value');
+                if (metadataSnap.exists()) {
+                    const metadata = metadataSnap.val();
+                    collection = metadata.collection || null;
+                }
+            } catch (error) {
+                // Metadata read failed, fall through to 3-collection search
+            }
+            
+            // If we have a collection hint, query that collection directly
+            if (collection) {
+                const doc = await DB.db.collection(collection).doc(submissionId).get();
+                if (doc.exists) {
+                    return { id: doc.id, ...doc.data() };
+                }
+            }
+            
+            // Fallback: Try all collections if hint missing or query failed
             // Try to find in submissions collection first
             let doc = await DB.db.collection('submissions').doc(submissionId).get();
             if (doc.exists) {
