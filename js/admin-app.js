@@ -150,6 +150,51 @@ const AdminDashboard = {
     },
     
     /**
+     * Initialize stats totals (run once to enable incremental stats updates)
+     */
+    async initializeStatsTotals() {
+        try {
+            // Show loading state
+            Toast.info('Initializing stats totals... This may take a minute.', { duration: 5000 });
+            
+            const functions = firebase.functions();
+            const initializeStats = functions.httpsCallable('initializeStatsTotals');
+            
+            const result = await initializeStats();
+            
+            if (result.data.success) {
+                Toast.success('Stats totals initialized successfully!');
+                console.log('Stats initialized:', result.data.stats);
+                
+                // Refresh stats display
+                await this.loadStats();
+                
+                // Show success message with details
+                const stats = result.data.stats;
+                const message = `Stats initialized:\n` +
+                    `• Total Users: ${stats.totalUsers}\n` +
+                    `• Active Users: ${stats.activeUsers}\n` +
+                    `• Total Points: ${stats.totalPoints}\n` +
+                    `• Pending Submissions: ${stats.pendingSubmissions}\n` +
+                    `• Approved Submissions: ${stats.approvedSubmissions}`;
+                
+                alert(message);
+            } else {
+                throw new Error(result.data.message || 'Initialization failed');
+            }
+        } catch (error) {
+            console.error('Error initializing stats:', error);
+            const errorMessage = error.message || 'Failed to initialize stats totals';
+            Toast.error(errorMessage);
+            
+            // Show detailed error if available
+            if (error.details) {
+                console.error('Error details:', error.details);
+            }
+        }
+    },
+    
+    /**
      * Update a stat card with value and timestamp
      * @param {string} statId - Base stat ID (e.g., 'stat-total-users')
      * @param {number} currentValue - Current value

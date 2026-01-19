@@ -78,7 +78,7 @@ const Auth = {
             displayName: user.displayName || userData?.displayName || userData?.name,
             photoURL: user.photoURL || userData?.photoURL || userData?.photo // Use photoURL (fallback to photo for backward compatibility)
         };
-
+        
         // Clear cached activity lists on each login so deleted/updated items
         // are not served from stale localStorage
         try {

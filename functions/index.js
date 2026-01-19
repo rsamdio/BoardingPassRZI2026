@@ -96,6 +96,8 @@ async function updateLeaderboardCache() {
 
 /**
  * Update individual user rank in RTDB
+ * @deprecated Use updateLeaderboardCache() instead - it calculates ranks for all users
+ * This function is kept for backward compatibility only and should not be called
  */
 async function updateUserRank(uid, points) {
   try {
@@ -462,10 +464,50 @@ async function updateEmailCache(email, uid, type, isDelete = false) {
 
 /**
  * Update admin dashboard statistics cache in RTDB
- * Aggregates user counts, points, and submission statistics
+ * Supports incremental updates to avoid full collection scans
+ * @param {Object} incrementalUpdate - Optional incremental update object (e.g., {pendingSubmissions: 1})
  */
-async function updateAdminStatsCache() {
+async function updateAdminStatsCache(incrementalUpdate = null) {
   try {
+    // Check if we have running totals initialized
+    const statsRef = rtdb.ref("adminCache/stats");
+    const statsSnap = await statsRef.once("value");
+    const currentStats = statsSnap.exists() ? statsSnap.val() : null;
+    
+    // If incremental update provided, apply it
+    if (incrementalUpdate && currentStats && currentStats.initialized) {
+      // Apply incremental updates by reading current values and adding increments
+      const updatedStats = { ...currentStats };
+      Object.keys(incrementalUpdate).forEach(key => {
+        if (typeof incrementalUpdate[key] === 'number') {
+          // Increment/decrement numeric values
+          updatedStats[key] = (updatedStats[key] || 0) + incrementalUpdate[key];
+        } else {
+          // Direct assignment for non-numeric values
+          updatedStats[key] = incrementalUpdate[key];
+        }
+      });
+      
+      // Always update lastUpdated and version
+      updatedStats.lastUpdated = Date.now();
+      updatedStats.version = (updatedStats.version || 0) + 1;
+      
+      await statsRef.set(updatedStats);
+      return;
+    }
+    
+    // If cache is fresh (< 15 minutes), skip full recalculation
+    if (currentStats && currentStats.lastUpdated) {
+      const age = Date.now() - currentStats.lastUpdated;
+      const STALE_THRESHOLD = 15 * 60 * 1000; // 15 minutes
+      
+      if (age < STALE_THRESHOLD && currentStats.initialized) {
+        // Cache is fresh, no need to recalculate
+        return;
+      }
+    }
+    
+    // Full recalculation (only if cache is stale or not initialized)
     // Fetch all users (active and pending)
     const [usersSnapshot, pendingUsersSnapshot, submissionsSnapshot] = await Promise.all([
       db.collection("users")
@@ -514,6 +556,8 @@ async function updateAdminStatsCache() {
       approvedSubmissions: approvedSubmissions,
       rejectedSubmissions: rejectedSubmissions,
       lastUpdated: Date.now(),
+      version: (currentStats?.version || 0) + 1,
+      initialized: true
     });
   } catch (error) {
     console.error("Error updating admin stats cache:", error);
@@ -1505,8 +1549,138 @@ async function updateUserActivityLists(userId, excludeActivityIds = []) {
 }
 
 /**
+ * Update user activity lists (optimized version with pre-fetched activities)
+ * @param {string} userId - User ID
+ * @param {Object} preFetchedActivities - Pre-fetched activities data
+ * @param {Array} excludeActivityIds - Activity IDs to exclude
+ */
+async function updateUserActivityListsOptimized(userId, preFetchedActivities, excludeActivityIds = []) {
+  try {
+    // Fetch completions for this specific user (still need per-user data)
+    const completion = await getCompletionStatusFromCache(userId);
+    
+    // Use pre-fetched activities instead of reading again
+    let activities = preFetchedActivities;
+    
+    // Filter excluded activities
+    if (excludeActivityIds.length > 0) {
+      activities = {
+        quizzes: activities.quizzes.filter(q => !excludeActivityIds.includes(q.id)),
+        tasks: activities.tasks.filter(t => !excludeActivityIds.includes(t.id)),
+        forms: activities.forms.filter(f => !excludeActivityIds.includes(f.id))
+      };
+    }
+    
+    // PRE-COMPUTE: Pending activities
+    const pending = {
+      quizzes: activities.quizzes.filter(q => {
+        const isCompleted = completion.quizzes && completion.quizzes[q.id];
+        return !isCompleted;
+      }),
+      tasks: activities.tasks.filter(t => {
+        const taskCompletion = completion.tasks?.[t.id];
+        if (!taskCompletion) {
+          return true;
+        }
+        return taskCompletion.status === 'rejected';
+      }),
+      forms: activities.forms.filter(f => {
+        return !completion.forms || !completion.forms[f.id];
+      }),
+      combined: []
+    };
+    
+    // PRE-COMPUTE: Completed activities
+    const completed = {
+      quizzes: activities.quizzes
+        .filter(q => {
+          const isCompleted = completion.quizzes && completion.quizzes[q.id];
+          return isCompleted;
+        })
+        .map(q => {
+          const completionData = completion.quizzes[q.id] || {};
+          return { 
+            ...q, 
+            ...completionData, 
+            itemType: 'quiz', 
+            completed: true,
+            id: q.id
+          };
+        }),
+      tasks: activities.tasks
+        .filter(t => {
+          const taskCompletion = completion.tasks?.[t.id];
+          return taskCompletion && taskCompletion.status === 'approved';
+        })
+        .map(t => ({ ...t, ...completion.tasks[t.id], itemType: 'task', completed: true })),
+      forms: activities.forms
+        .filter(f => completion.forms && completion.forms[f.id])
+        .map(f => ({ ...f, ...completion.forms[f.id], itemType: 'form', completed: true })),
+      combined: []
+    };
+    
+    // Combine for "All" tab
+    pending.combined = [
+      ...pending.quizzes.map(q => ({ ...q, itemType: 'quiz' })),
+      ...pending.tasks.map(t => ({ ...t, itemType: 'task' })),
+      ...pending.forms.map(f => ({ ...f, itemType: 'form' }))
+    ];
+    
+    completed.combined = [
+      ...completed.quizzes,
+      ...completed.tasks,
+      ...completed.forms
+    ].sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
+    
+    // Get current metadata version
+    const metadataRef = rtdb.ref(`cache/users/${userId}/pendingActivities/metadata`);
+    const metadataSnap = await metadataRef.once('value');
+    const currentVersion = metadataSnap.val()?.version || 0;
+    
+    // Store in RTDB
+    await rtdb.ref(`cache/users/${userId}`).update({
+      'pendingActivities': {
+        quizzes: pending.quizzes,
+        tasks: pending.tasks,
+        forms: pending.forms,
+        combined: pending.combined,
+        metadata: { 
+          lastUpdated: Date.now(), 
+          version: currentVersion + 1,
+          counts: {
+            quizzes: pending.quizzes.length,
+            tasks: pending.tasks.length,
+            forms: pending.forms.length,
+            combined: pending.combined.length
+          }
+        }
+      },
+      'completedActivities': {
+        quizzes: completed.quizzes,
+        tasks: completed.tasks,
+        forms: completed.forms,
+        combined: completed.combined,
+        metadata: { 
+          lastUpdated: Date.now(), 
+          version: currentVersion + 1,
+          counts: {
+            quizzes: completed.quizzes.length,
+            tasks: completed.tasks.length,
+            forms: completed.forms.length,
+            combined: completed.combined.length
+          }
+        }
+      }
+    });
+  } catch (error) {
+    console.error(`Error updating user activity lists for ${userId}:`, error);
+    throw error;
+  }
+}
+
+/**
  * Batch update helper: Trigger pre-compute updates for all users
- * Non-blocking, processes in batches
+ * OPTIMIZED: Pre-fetches activities once before updating all users
  * Falls back to Firestore if directory cache is empty
  */
 async function triggerUserActivityListUpdates(activityId = null, activityType = null) {
@@ -1536,19 +1710,32 @@ async function triggerUserActivityListUpdates(activityId = null, activityType = 
     }
     
     // CRITICAL: If activityId is provided, explicitly exclude it from all user lists
-    // This ensures deleted activities are never included, even if RTDB hasn't fully propagated
     const excludeIds = activityId ? [activityId] : [];
     
-    // Update all users in parallel (not batches) - faster for smaller user bases
-    // For larger user bases, this will still work but may hit rate limits
+    // OPTIMIZATION: Fetch activities ONCE before updating all users
+    const activities = await getActivitiesFromIndexedCache();
+    
+    // Filter excluded activities from the pre-fetched data
+    const filteredActivities = {
+      quizzes: excludeIds.length > 0 
+        ? activities.quizzes.filter(q => !excludeIds.includes(q.id))
+        : activities.quizzes,
+      tasks: excludeIds.length > 0
+        ? activities.tasks.filter(t => !excludeIds.includes(t.id))
+        : activities.tasks,
+      forms: excludeIds.length > 0
+        ? activities.forms.filter(f => !excludeIds.includes(f.id))
+        : activities.forms
+    };
+    
+    // Now update all users with pre-fetched activities (only 1 read for activities, not N)
     await Promise.all(
       userIds.map(uid => 
-        updateUserActivityLists(uid, excludeIds).catch(err => {
-            console.error(`Failed to update lists for ${uid}:`, err);
-          // Return null on error so Promise.all doesn't fail
+        updateUserActivityListsOptimized(uid, filteredActivities, excludeIds).catch(err => {
+          console.error(`Failed to update lists for ${uid}:`, err);
           return null;
-          })
-        )
+        })
+      )
     );
     
   } catch (error) {
@@ -1596,34 +1783,50 @@ async function updateSubmissionLists(submissionId, submissionData, changeType) {
       let formTitle = submissionData.formTitle || null;
       let quizTitle = submissionData.quizTitle || null;
       
-      // If title not in submission data, fetch from task/form/quiz document
+      // If title not in submission data, try RTDB cache (no Firestore read)
       if (!taskTitle && taskId) {
         try {
-          const taskDoc = await db.collection('tasks').doc(taskId).get();
-          if (taskDoc.exists) {
-            taskTitle = taskDoc.data().title || null;
+          const taskCacheRef = rtdb.ref(`adminCache/tasks/${taskId}`);
+          const taskCacheSnap = await taskCacheRef.once('value');
+          if (taskCacheSnap.exists()) {
+            taskTitle = taskCacheSnap.val()?.title || null;
+          }
+          // If still not found, log warning but don't read from Firestore
+          if (!taskTitle) {
+            console.warn(`[updateSubmissionLists] Task title not found in cache for ${taskId}, using null`);
           }
         } catch (error) {
+          console.warn(`[updateSubmissionLists] Error reading task cache for ${taskId}:`, error);
         }
       }
       
       if (!formTitle && formId) {
         try {
-          const formDoc = await db.collection('forms').doc(formId).get();
-          if (formDoc.exists) {
-            formTitle = formDoc.data().title || null;
+          const formCacheRef = rtdb.ref(`adminCache/forms/${formId}`);
+          const formCacheSnap = await formCacheRef.once('value');
+          if (formCacheSnap.exists()) {
+            formTitle = formCacheSnap.val()?.title || null;
+          }
+          if (!formTitle) {
+            console.warn(`[updateSubmissionLists] Form title not found in cache for ${formId}, using null`);
           }
         } catch (error) {
+          console.warn(`[updateSubmissionLists] Error reading form cache for ${formId}:`, error);
         }
       }
       
       if (!quizTitle && quizId) {
         try {
-          const quizDoc = await db.collection('quizzes').doc(quizId).get();
-          if (quizDoc.exists) {
-            quizTitle = quizDoc.data().title || null;
+          const quizCacheRef = rtdb.ref(`adminCache/quizzes/${quizId}`);
+          const quizCacheSnap = await quizCacheRef.once('value');
+          if (quizCacheSnap.exists()) {
+            quizTitle = quizCacheSnap.val()?.title || null;
+          }
+          if (!quizTitle) {
+            console.warn(`[updateSubmissionLists] Quiz title not found in cache for ${quizId}, using null`);
           }
         } catch (error) {
+          console.warn(`[updateSubmissionLists] Error reading quiz cache for ${quizId}:`, error);
         }
       }
       
@@ -1869,8 +2072,8 @@ exports.onUserUpdate = onDocumentUpdated(
       // Check if points changed
       const pointsChanged = (before.points || 0) !== (after.points || 0);
       if (pointsChanged) {
-        updates.push(updateLeaderboardCache());
-        updates.push(updateUserRank(uid, after.points || 0));
+        updates.push(updateLeaderboardCache()); // This now includes rank updates for all users
+        // updateUserRank() removed - rank is calculated in updateLeaderboardCache()
       }
 
       // Check if user data changed (affects admin cache)
@@ -1882,8 +2085,25 @@ exports.onUserUpdate = onDocumentUpdated(
           (before.status !== after.status);
 
       // Check if points changed (affects stats)
+      // Note: Points changes don't affect user counts, so we can skip incremental update
+      // Only recalculate if cache is stale (handled by updateAdminStatsCache internally)
       if (pointsChanged || userDataChanged) {
-        updates.push(updateAdminStatsCache());
+        updates.push(updateAdminStatsCache()); // Will use cache if fresh
+      }
+      
+      // Handle status changes (incremental)
+      if (before.status !== after.status) {
+        if (before.status === 'pending' && after.status === 'active') {
+          // User activated: increment activeUsers
+          updates.push(updateAdminStatsCache({
+            activeUsers: 1
+          }));
+        } else if (before.status === 'active' && after.status === 'pending') {
+          // User deactivated: decrement activeUsers
+          updates.push(updateAdminStatsCache({
+            activeUsers: -1
+          }));
+        }
       }
 
       if (userDataChanged) {
@@ -1940,11 +2160,14 @@ exports.onUserCreate = onDocumentCreated(
       }
 
       const updates = [
-        updateLeaderboardCache(),
+        updateLeaderboardCache(), // This now includes rank updates for all users
         updateAdminParticipantsCache(),
         updateAttendeeDirectoryCache(), // Also update attendee directory cache
-        updateAdminStatsCache(),
-        updateUserRank(uid, userData.points || 0),
+        updateAdminStatsCache({
+          totalUsers: 1,
+          activeUsers: userData.status === 'active' ? 1 : 0
+        }),
+        // updateUserRank() removed - rank is calculated in updateLeaderboardCache()
         updateUserStatsCache(uid),
         updateUserCompletionStatusCache(uid),
         // Generate pre-computed activity lists for the new user
@@ -1976,7 +2199,10 @@ exports.onPendingUserCreate = onDocumentCreated(
 
       const updates = [
         updateAdminParticipantsCache(),
-        updateAdminStatsCache(),
+        updateAdminStatsCache({
+          totalUsers: 1,
+          pendingUsers: 1
+        }),
         updateEmailCache(email, null, "pending"),
       ];
 
@@ -2016,7 +2242,10 @@ exports.onPendingUserDelete = onDocumentDeleted(
 
       const updates = [
         updateAdminParticipantsCache(),
-        updateAdminStatsCache(),
+        updateAdminStatsCache({
+          totalUsers: -1,
+          pendingUsers: -1
+        }),
         updateEmailCache(email, null, "pending", true),
       ];
 
@@ -2106,8 +2335,10 @@ exports.onSubmissionCreate = onDocumentCreated(
       Promise.all([
         // Update user stats
         updateUserStats(userId),
-        // Update admin caches
-        updateAdminStatsCache(),
+        // Update admin caches (incremental: new submission = pending)
+        updateAdminStatsCache({
+          pendingSubmissions: 1
+        }),
         updateRecentActivityCache(),
         updateSubmissionCountsCache(),
         // Update old caches (for backward compatibility)
@@ -2155,12 +2386,26 @@ exports.onSubmissionUpdate = onDocumentUpdated(
         await rtdb.ref().update(statusUpdates);
       }
       
+      // Prepare stats update for status changes
+      let statsUpdate = null;
+      if (statusChanged) {
+        statsUpdate = {};
+        // Decrement old status
+        if (before.status === 'pending') statsUpdate.pendingSubmissions = -1;
+        else if (before.status === 'approved') statsUpdate.approvedSubmissions = -1;
+        else if (before.status === 'rejected') statsUpdate.rejectedSubmissions = -1;
+        // Increment new status
+        if (after.status === 'pending') statsUpdate.pendingSubmissions = (statsUpdate.pendingSubmissions || 0) + 1;
+        else if (after.status === 'approved') statsUpdate.approvedSubmissions = (statsUpdate.approvedSubmissions || 0) + 1;
+        else if (after.status === 'rejected') statsUpdate.rejectedSubmissions = (statsUpdate.rejectedSubmissions || 0) + 1;
+      }
+      
       const updates = [
         // 1. Update indexed submission cache (this will add to new status path)
         // Note: This happens AFTER old path removal to ensure atomic updates
         updateSubmissionLists(event.params.submissionId, after, 'update'),
-        // 2. Update admin caches
-        updateAdminStatsCache(),
+        // 2. Update admin caches (incremental: handle status changes)
+        updateAdminStatsCache(statsUpdate),
         updateRecentActivityCache()
       ];
       
@@ -2195,9 +2440,21 @@ exports.onSubmissionUpdate = onDocumentUpdated(
         updates.push(updateUserStatsCache(userId));
         
         // Create notification for status change
+        // Use taskTitle from submission data or cache (avoid Firestore read)
+        let taskTitle = after.taskTitle || 'Task';
+        if (!taskTitle || taskTitle === 'Task') {
+          try {
+            const taskCacheRef = rtdb.ref(`adminCache/tasks/${taskId}`);
+            const taskCacheSnap = await taskCacheRef.once('value');
+            if (taskCacheSnap.exists()) {
+              taskTitle = taskCacheSnap.val()?.title || 'Task';
+            }
+          } catch (error) {
+            // Fallback to 'Task' if cache read fails
+          }
+        }
+        
         if (after.status === 'approved') {
-          const taskDoc = await db.collection('tasks').doc(taskId).get();
-          const taskTitle = taskDoc.exists ? taskDoc.data().title : 'Task';
           updateUserNotificationCache(userId, {
             type: 'submission_approved',
             title: 'Submission Approved!',
@@ -2205,8 +2462,6 @@ exports.onSubmissionUpdate = onDocumentUpdated(
             points: after.pointsAwarded || 0
           });
         } else if (after.status === 'rejected') {
-          const taskDoc = await db.collection('tasks').doc(taskId).get();
-          const taskTitle = taskDoc.exists ? taskDoc.data().title : 'Task';
           updateUserNotificationCache(userId, {
             type: 'submission_rejected',
             title: 'Submission Rejected',
@@ -2242,8 +2497,12 @@ exports.onSubmissionDelete = onDocumentDeleted(
         }) : Promise.resolve(),
         // 3. PRE-COMPUTE: Update user activity lists
         userId ? updateUserActivityLists(userId) : Promise.resolve(),
-        // 4. Update admin caches
-        updateAdminStatsCache(),
+        // 4. Update admin caches (incremental: decrement submission count by status)
+        updateAdminStatsCache({
+          [submissionData.status === 'pending' ? 'pendingSubmissions' : 
+            submissionData.status === 'approved' ? 'approvedSubmissions' : 
+            'rejectedSubmissions']: -1
+        }),
         updateSubmissionCountsCache()
       ]);
       return null;
@@ -2266,7 +2525,10 @@ exports.onUserDelete = onDocumentDeleted(
         updateLeaderboardCache(),
         updateAdminParticipantsCache(),
         updateAttendeeDirectoryCache(), // Clear from directory cache
-        updateAdminStatsCache(),
+        updateAdminStatsCache({
+          totalUsers: -1,
+          activeUsers: deletedUserData.status === 'active' ? -1 : 0
+        }),
       ];
       
       // Clear email cache if email exists
@@ -3582,6 +3844,346 @@ exports.migrateToEnhancedStructure = onCall(
       } catch (error) {
         console.error("Migration error:", error);
         throw new Error(`Migration failed: ${error.message}`);
+      }
+    }
+);
+
+/**
+ * Callable function to initialize admin stats running totals
+ * Only accessible by admins
+ * Run this ONCE before using incremental stats updates
+ */
+exports.initializeStatsTotals = onCall(
+    {
+      region: region,
+      timeoutSeconds: 540,
+      memory: "512MiB"
+    },
+    async (request) => {
+      // Only allow admins
+      if (!request.auth) {
+        throw new Error("Unauthorized");
+      }
+      
+      const adminDoc = await db.collection("admins").doc(request.auth.uid).get();
+      if (!adminDoc.exists) {
+        throw new Error("Unauthorized: Admin required");
+      }
+      
+      try {
+        // Count Users
+        const usersSnapshot = await db.collection("users")
+          .where("role", "==", "attendee")
+          .get();
+        
+        const activeUsers = usersSnapshot.docs.filter(doc => 
+          doc.data().status === "active"
+        ).length;
+        
+        const totalUsers = usersSnapshot.size;
+        
+        // Count Pending Users
+        const pendingUsersSnapshot = await db.collection("pendingUsers").get();
+        const pendingUsers = pendingUsersSnapshot.size;
+        
+        // Count Submissions by Status
+        const submissionsSnapshot = await db.collection("submissions").get();
+        
+        let pendingSubmissions = 0;
+        let approvedSubmissions = 0;
+        let rejectedSubmissions = 0;
+        
+        submissionsSnapshot.forEach(doc => {
+          const status = doc.data().status || "pending";
+          if (status === "pending") pendingSubmissions++;
+          else if (status === "approved") approvedSubmissions++;
+          else if (status === "rejected") rejectedSubmissions++;
+        });
+        
+        // Calculate Total Points
+        let totalPoints = 0;
+        usersSnapshot.forEach(doc => {
+          totalPoints += doc.data().points || 0;
+        });
+        
+        // Initialize Running Totals in RTDB
+        const statsData = {
+          totalUsers: totalUsers + pendingUsers,
+          activeUsers: activeUsers,
+          pendingUsers: pendingUsers,
+          totalPoints: totalPoints,
+          pendingSubmissions: pendingSubmissions,
+          approvedSubmissions: approvedSubmissions,
+          rejectedSubmissions: rejectedSubmissions,
+          lastUpdated: Date.now(),
+          version: 1,
+          initialized: true
+        };
+        
+        await rtdb.ref("adminCache/stats").set(statsData);
+        
+        return {
+          success: true,
+          message: "Stats totals initialized successfully",
+          stats: statsData,
+          timestamp: Date.now()
+        };
+      } catch (error) {
+        console.error("Error initializing stats:", error);
+        throw new Error(`Initialization failed: ${error.message}`);
+      }
+    }
+);
+
+/**
+ * Callable function to backfill missing titles in submissions
+ * Only accessible by admins
+ * Run this ONCE to backfill existing submissions with titles
+ */
+exports.backfillSubmissionTitles = onCall(
+    {
+      region: region,
+      timeoutSeconds: 540,
+      memory: "512MiB"
+    },
+    async (request) => {
+      // Only allow admins
+      if (!request.auth) {
+        throw new Error("Unauthorized");
+      }
+      
+      const adminDoc = await db.collection("admins").doc(request.auth.uid).get();
+      if (!adminDoc.exists) {
+        throw new Error("Unauthorized: Admin required");
+      }
+      
+      try {
+        let processed = 0;
+        let updated = 0;
+        let skipped = 0;
+        let errors = 0;
+        
+        // Process Task Submissions
+        const taskSubmissionsSnapshot = await db.collection("submissions")
+          .where("taskId", "!=", null)
+          .get();
+        
+        let batch = db.batch();
+        let batchCount = 0;
+        const BATCH_SIZE = 500;
+        
+        for (const doc of taskSubmissionsSnapshot.docs) {
+          try {
+            const data = doc.data();
+            
+            if (data.taskTitle) {
+              skipped++;
+              continue;
+            }
+            
+            let taskTitle = null;
+            if (data.taskId) {
+              try {
+                const taskCacheRef = rtdb.ref(`adminCache/tasks/${data.taskId}`);
+                const taskCacheSnap = await taskCacheRef.once('value');
+                if (taskCacheSnap.exists()) {
+                  taskTitle = taskCacheSnap.val()?.title || null;
+                }
+                
+                if (!taskTitle) {
+                  const taskDoc = await db.collection('tasks').doc(data.taskId).get();
+                  if (taskDoc.exists) {
+                    taskTitle = taskDoc.data().title || null;
+                  }
+                }
+              } catch (error) {
+                console.error(`Error fetching task title for ${data.taskId}:`, error);
+                errors++;
+                continue;
+              }
+            }
+            
+            if (taskTitle) {
+              batch.update(doc.ref, { taskTitle: taskTitle });
+              batchCount++;
+              updated++;
+              
+              if (batchCount >= BATCH_SIZE) {
+                await batch.commit();
+                batch = db.batch();
+                batchCount = 0;
+              }
+            } else {
+              skipped++;
+            }
+            
+            processed++;
+          } catch (error) {
+            console.error(`Error processing submission ${doc.id}:`, error);
+            errors++;
+          }
+        }
+        
+        if (batchCount > 0) {
+          await batch.commit();
+        }
+        
+        const taskResults = { processed, updated, skipped, errors };
+        
+        // Process Form Submissions
+        processed = 0;
+        updated = 0;
+        skipped = 0;
+        errors = 0;
+        batch = db.batch();
+        batchCount = 0;
+        
+        const formSubmissionsSnapshot = await db.collection("formSubmissions").get();
+        
+        for (const doc of formSubmissionsSnapshot.docs) {
+          try {
+            const data = doc.data();
+            
+            if (data.formTitle) {
+              skipped++;
+              continue;
+            }
+            
+            let formTitle = null;
+            if (data.formId) {
+              try {
+                const formCacheRef = rtdb.ref(`adminCache/forms/${data.formId}`);
+                const formCacheSnap = await formCacheRef.once('value');
+                if (formCacheSnap.exists()) {
+                  formTitle = formCacheSnap.val()?.title || null;
+                }
+                
+                if (!formTitle) {
+                  const formDoc = await db.collection('forms').doc(data.formId).get();
+                  if (formDoc.exists) {
+                    formTitle = formDoc.data().title || null;
+                  }
+                }
+              } catch (error) {
+                console.error(`Error fetching form title for ${data.formId}:`, error);
+                errors++;
+                continue;
+              }
+            }
+            
+            if (formTitle) {
+              batch.update(doc.ref, { formTitle: formTitle });
+              batchCount++;
+              updated++;
+              
+              if (batchCount >= BATCH_SIZE) {
+                await batch.commit();
+                batch = db.batch();
+                batchCount = 0;
+              }
+            } else {
+              skipped++;
+            }
+            
+            processed++;
+          } catch (error) {
+            console.error(`Error processing form submission ${doc.id}:`, error);
+            errors++;
+          }
+        }
+        
+        if (batchCount > 0) {
+          await batch.commit();
+        }
+        
+        const formResults = { processed, updated, skipped, errors };
+        
+        // Process Quiz Submissions
+        processed = 0;
+        updated = 0;
+        skipped = 0;
+        errors = 0;
+        batch = db.batch();
+        batchCount = 0;
+        
+        const quizSubmissionsSnapshot = await db.collection("quizSubmissions").get();
+        
+        for (const doc of quizSubmissionsSnapshot.docs) {
+          try {
+            const data = doc.data();
+            
+            if (data.quizTitle) {
+              skipped++;
+              continue;
+            }
+            
+            let quizTitle = null;
+            if (data.quizId) {
+              try {
+                const quizCacheRef = rtdb.ref(`adminCache/quizzes/${data.quizId}`);
+                const quizCacheSnap = await quizCacheRef.once('value');
+                if (quizCacheSnap.exists()) {
+                  quizTitle = quizCacheSnap.val()?.title || null;
+                }
+                
+                if (!quizTitle) {
+                  const quizDoc = await db.collection('quizzes').doc(data.quizId).get();
+                  if (quizDoc.exists) {
+                    quizTitle = quizDoc.data().title || null;
+                  }
+                }
+              } catch (error) {
+                console.error(`Error fetching quiz title for ${data.quizId}:`, error);
+                errors++;
+                continue;
+              }
+            }
+            
+            if (quizTitle) {
+              batch.update(doc.ref, { quizTitle: quizTitle });
+              batchCount++;
+              updated++;
+              
+              if (batchCount >= BATCH_SIZE) {
+                await batch.commit();
+                batch = db.batch();
+                batchCount = 0;
+              }
+            } else {
+              skipped++;
+            }
+            
+            processed++;
+          } catch (error) {
+            console.error(`Error processing quiz submission ${doc.id}:`, error);
+            errors++;
+          }
+        }
+        
+        if (batchCount > 0) {
+          await batch.commit();
+        }
+        
+        const quizResults = { processed, updated, skipped, errors };
+        
+        return {
+          success: true,
+          message: "Title backfill complete",
+          results: {
+            tasks: taskResults,
+            forms: formResults,
+            quizzes: quizResults,
+            total: {
+              updated: taskResults.updated + formResults.updated + quizResults.updated,
+              skipped: taskResults.skipped + formResults.skipped + quizResults.skipped,
+              errors: taskResults.errors + formResults.errors + quizResults.errors
+            }
+          },
+          timestamp: Date.now()
+        };
+      } catch (error) {
+        console.error("Error backfilling titles:", error);
+        throw new Error(`Backfill failed: ${error.message}`);
       }
     }
 );

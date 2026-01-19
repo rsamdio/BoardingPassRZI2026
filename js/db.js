@@ -16,6 +16,9 @@ const DB = {
         localStorageHits: 0
     },
     
+    // In-flight request map for deduplication (key -> Promise)
+    _pendingRequests: new Map(),
+    
     /**
      * Get cache performance metrics
      */

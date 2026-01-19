@@ -387,15 +387,15 @@ const UI = {
                     Cache.clear(cacheKey);
                     
                     // Always refresh if home or activities view is active
-                    const activeView = document.querySelector('.view-section.active')?.id;
-                    if (activeView === 'view-activities' || activeView === 'view-home') {
-                        this.renderActivities();
-                        this.renderPendingActivities();
+                const activeView = document.querySelector('.view-section.active')?.id;
+                if (activeView === 'view-activities' || activeView === 'view-home') {
+                    this.renderActivities();
+                    this.renderPendingActivities();
                     } else {
                         // Even if not active, clear cache so next view shows fresh data
                         Cache.clear(cacheKey);
-                    }
                 }
+            }
                 
                 lastMetadataVersions[activityType] = currentVersion;
             }
@@ -408,7 +408,7 @@ const UI = {
             
             ref.on('value', (snapshot) => {
                 activitiesListener(snapshot, activityType);
-            }, (error) => {
+        }, (error) => {
                 console.error(`Error listening to ${activityType} updates:`, error);
             });
         });
@@ -452,7 +452,7 @@ const UI = {
                         ttl: 0
                     });
                     const existingTaskIds = tasksCache.data ? Object.keys(tasksCache.data) : [];
-                    
+                
                     // Filter out tasks that don't exist in indexed cache (they were deleted)
                     verifiedFiltered = filtered.filter(item => {
                         if (item.itemType === 'task' || item.taskId) {
@@ -468,18 +468,18 @@ const UI = {
             
             // Map items to ensure proper structure
             const allItems = verifiedFiltered.map(item => {
-                // For tasks, check the type field to determine if it's a form task
-                const isFormTask = item.itemType === 'task' && item.type === 'form';
-                const baseItem = {
-                    ...item,
-                    itemType: item.itemType || 'task',
-                    // Preserve the type field for tasks (form vs upload)
-                    type: item.type || (item.itemType === 'task' ? 'upload' : undefined),
-                    isTask: item.itemType === 'task',
-                    desc: item.description || (item.itemType === 'quiz' ? 'Test your knowledge now!' : 'Complete this activity')
-                };
-                return baseItem;
-            });
+                    // For tasks, check the type field to determine if it's a form task
+                    const isFormTask = item.itemType === 'task' && item.type === 'form';
+                    const baseItem = {
+                        ...item,
+                        itemType: item.itemType || 'task',
+                        // Preserve the type field for tasks (form vs upload)
+                        type: item.type || (item.itemType === 'task' ? 'upload' : undefined),
+                        isTask: item.itemType === 'task',
+                        desc: item.description || (item.itemType === 'quiz' ? 'Test your knowledge now!' : 'Complete this activity')
+                    };
+                    return baseItem;
+                });
             
             this.renderPendingActivitiesList(allItems);
         } catch (error) {
@@ -504,7 +504,7 @@ const UI = {
         if (!listEl) return;
         
         listEl.innerHTML = '';
-
+        
         if (allItems.length === 0) {
             listEl.innerHTML = `
                 <div class="p-8 text-center flex flex-col items-center">
@@ -517,7 +517,7 @@ const UI = {
             `;
             return;
         }
-
+        
         allItems.forEach(item => {
             // Icon + button configuration per activity type
             // Use separate classes for background and icon color to keep the UI clean
