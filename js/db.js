@@ -383,38 +383,41 @@ const DB = {
         }
     },
     
-    // Migrate pending user to active user
-    async migratePendingUser(uid, normalizedEmail, pendingData) {
-        try {
-            const userRef = this.db.collection('users').doc(uid);
-            
-            // Create user document
-            await userRef.set({
-                email: normalizedEmail,
-                name: pendingData.name,
-                district: pendingData.district,
-                designation: pendingData.designation,
-                points: 0,
-                role: 'attendee',
-                status: 'active',
-                createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-                firstLoginAt: firebase.firestore.FieldValue.serverTimestamp()
-            });
-            
-            // Delete from pendingUsers
+        // Migrate pending user to active user
+        async migratePendingUser(uid, normalizedEmail, pendingData) {
             try {
-                const pendingUserRef = this.db.collection('pendingUsers').doc(normalizedEmail);
-                await pendingUserRef.delete();
-            } catch (deleteError) {
-                // Non-critical - user is migrated, pendingUsers entry can be cleaned up later
+                const userRef = this.db.collection('users').doc(uid);
+                
+                // Create user document
+                // Ensure we carry over all important profile fields from pending user,
+                // including phone number which was previously being dropped.
+                await userRef.set({
+                    email: normalizedEmail,
+                    name: pendingData.name,
+                    phone: pendingData.phone || '', // Preserve phone from pendingUsers
+                    district: pendingData.district,
+                    designation: pendingData.designation,
+                    points: 0,
+                    role: 'attendee',
+                    status: 'active',
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    firstLoginAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                
+                // Delete from pendingUsers
+                try {
+                    const pendingUserRef = this.db.collection('pendingUsers').doc(normalizedEmail);
+                    await pendingUserRef.delete();
+                } catch (deleteError) {
+                    // Non-critical - user is migrated, pendingUsers entry can be cleaned up later
+                }
+                
+                return await this.getUser(uid);
+            } catch (error) {
+                console.error('Error during migration:', error);
+                throw error;
             }
-            
-            return await this.getUser(uid);
-        } catch (error) {
-            console.error('Error during migration:', error);
-            throw error;
-        }
-    },
+        },
     
     // Update user document with Firebase auth data on login
     async updateUserOnLogin(uid, authData) {
