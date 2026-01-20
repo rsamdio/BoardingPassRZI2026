@@ -542,7 +542,7 @@ const UI = {
                 iconGlyph = 'fa-clipboard-list';
                 iconBgClass = 'bg-sky-100';
                 iconColorClass = 'text-sky-600';
-                btnText = 'Take Survey';
+                btnText = 'Fill the Form';
                 btnIcon = 'fa-pen';
                 action = `Forms.openForm('${item.id}')`;
             } else if (item.itemType === 'task' && item.type === 'form') {
