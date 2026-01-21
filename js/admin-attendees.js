@@ -744,43 +744,38 @@ const AdminAttendees = {
                 // Check if email already exists
                 const normalizedEmail = email.toLowerCase().trim();
                 
-                // Check RTDB email cache first (cost optimization)
+                // Check if email exists using optimized methods (no full collection scans)
+                // 1. Check RTDB email cache first (0 Firestore reads)
                 let emailExists = false;
                 try {
                     const emailCacheResult = await DB.readFromCache(`adminCache/emails/${normalizedEmail}`);
                     if (emailCacheResult.data && emailCacheResult.data.uid) {
-                        // Email exists in cache
+                        // Email exists in cache (either pending or active)
                         emailExists = true;
                     }
                 } catch (error) {
-                    // Cache miss or error - proceed to Firestore query
+                    // Cache miss - proceed to direct lookups
                 }
                 
-                // Still query Firestore for final validation (safety)
-                // This ensures we catch any edge cases where cache might be stale
-                const [pendingUsers, allUsers] = await Promise.all([
-                    DB.getPendingUsers().catch(() => []),
-                    // Query Firestore directly to bypass cache and get fresh data
-                    DB.db.collection('users')
-                        .where('email', '==', normalizedEmail)
-                        .limit(1)
-                        .get()
-                        .then(snapshot => snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() })))
-                        .catch(() => [])
-                ]);
+                // 2. If not in cache, check with direct document lookups (1-2 reads total)
+                if (!emailExists) {
+                    const [pendingExists, activeUser] = await Promise.all([
+                        DB.checkPendingUserExists(normalizedEmail), // 1 read (direct doc lookup)
+                        // Query Firestore directly for active users (1 read max with limit)
+                        DB.db.collection('users')
+                            .where('email', '==', normalizedEmail)
+                            .limit(1)
+                            .get()
+                            .then(snapshot => snapshot.docs.length > 0 ? { uid: snapshot.docs[0].id, ...snapshot.docs[0].data() } : null)
+                            .catch(() => null)
+                    ]);
+                    
+                    if (pendingExists || activeUser) {
+                        emailExists = true;
+                    }
+                }
                 
-                const existingPending = pendingUsers.find(p => {
-                    const pendingEmail = (p.email || '').toLowerCase().trim();
-                    return pendingEmail === normalizedEmail;
-                });
-                const existingUser = allUsers.find(u => {
-                    const userEmail = (u.email || '').toLowerCase().trim();
-                    return userEmail === normalizedEmail;
-                });
-                
-                // If email exists in cache, we can skip Firestore query in future optimizations
-                // For now, we still do Firestore query for safety
-                if (emailExists || existingPending || existingUser) {
+                if (emailExists) {
                     Toast.error('This email is already registered');
                     return;
                 }
@@ -831,14 +826,11 @@ const AdminAttendees = {
             const errors = [];
             
             // Get existing emails to check for duplicates
-            const [pendingUsers, allUsers] = await Promise.all([
-                DB.getPendingUsers().catch(() => []),
-                DB.getAllUsers().catch(() => [])
-            ]);
-            const existingEmails = new Set([
-                ...pendingUsers.map(u => u.email?.toLowerCase()),
-                ...allUsers.map(u => u.email?.toLowerCase())
-            ].filter(Boolean));
+            // Use getAllAttendees() which uses RTDB cache first (much cheaper than separate calls)
+            const allAttendees = await DB.getAllAttendees().catch(() => []);
+            const existingEmails = new Set(
+                allAttendees.map(u => u.email?.toLowerCase()).filter(Boolean)
+            );
             
             for (let i = startIndex; i < lines.length; i++) {
                 const line = lines[i].trim();

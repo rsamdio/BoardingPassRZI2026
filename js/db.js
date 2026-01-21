@@ -564,12 +564,30 @@ const DB = {
         }
         
         // Fallback to Firestore (calculate on the fly)
+        // Try RTDB participants cache first to avoid reading all pendingUsers
+        let pendingUsersCount = 0;
+        try {
+            const participantsCacheRef = this.rtdb.ref('adminCache/participants');
+            const participantsCacheSnap = await new Promise((resolve, reject) => {
+                participantsCacheRef.once('value', resolve, reject);
+            });
+            if (participantsCacheSnap.exists()) {
+                const cacheData = participantsCacheSnap.val();
+                pendingUsersCount = cacheData.pending ? cacheData.pending.length : 0;
+            }
+        } catch (error) {
+            // Cache miss - will read from Firestore below
+        }
+        
         try {
             const [usersSnapshot, pendingUsersSnapshot, submissionsSnapshot] = await Promise.all([
                 this.db.collection('users')
                     .where('role', '==', 'attendee')
                     .get(),
-                this.db.collection('pendingUsers').get(),
+                // Only read pendingUsers if we couldn't get count from cache
+                pendingUsersCount > 0 
+                    ? Promise.resolve({ size: pendingUsersCount }) 
+                    : this.db.collection('pendingUsers').get(),
                 this.db.collection('submissions').get()
             ]);
             
@@ -584,7 +602,7 @@ const DB = {
             });
             
             const activeUsers = allUsers.filter(u => u.status === 'active');
-            const pendingUsers = pendingUsersSnapshot.size;
+            const pendingUsers = pendingUsersCount > 0 ? pendingUsersCount : pendingUsersSnapshot.size;
             const totalUsers = allUsers.length + pendingUsers;
             const totalPoints = allUsers.reduce((sum, u) => sum + (u.points || 0), 0);
             
@@ -737,7 +755,40 @@ const DB = {
     },
     
     // Pending Users Operations (for admin to add attendees)
+    /**
+     * Get all pending users - tries RTDB cache first, falls back to Firestore
+     * WARNING: This reads the entire collection. Use checkPendingUserExists() for single email checks.
+     */
     async getPendingUsers() {
+        // Try RTDB cache first (cheap read)
+        try {
+            const cacheRef = this.rtdb.ref('adminCache/participants');
+            const cacheSnap = await new Promise((resolve, reject) => {
+                cacheRef.once('value', resolve, reject);
+            });
+            
+            if (cacheSnap.exists()) {
+                const cacheData = cacheSnap.val();
+                const lastUpdated = cacheData.lastUpdated || 0;
+                const now = Date.now();
+                const staleThreshold = 5 * 60 * 1000; // 5 minutes
+                
+                // Use cache if not stale
+                if (now - lastUpdated < staleThreshold && cacheData.pending) {
+                    return cacheData.pending.map(p => ({
+                        email: p.email,
+                        ...p,
+                        uid: null,
+                        points: 0,
+                        status: 'pending'
+                    }));
+                }
+            }
+        } catch (error) {
+            // Cache miss or error - fall back to Firestore
+        }
+        
+        // Fallback to Firestore (expensive - reads all documents)
         const snapshot = await this.db.collection('pendingUsers').get();
         return snapshot.docs.map(doc => ({
             email: doc.id,
@@ -746,6 +797,42 @@ const DB = {
             points: 0,
             status: 'pending'
         }));
+    },
+    
+    /**
+     * Check if a specific email exists in pendingUsers using direct document lookup
+     * This is MUCH more efficient than getPendingUsers() - only 1 read instead of reading all documents
+     * @param {string} email - Email to check (will be normalized)
+     * @returns {Promise<boolean>} - True if email exists in pendingUsers
+     */
+    async checkPendingUserExists(email) {
+        if (!email) return false;
+        
+        const normalizedEmail = email.toLowerCase().trim();
+        
+        // Try RTDB email cache first (cheapest - 0 Firestore reads)
+        try {
+            const emailCacheResult = await this.readFromCache(`adminCache/emails/${normalizedEmail}`);
+            if (emailCacheResult.data && emailCacheResult.data.type === 'pending') {
+                return true;
+            }
+            // If email exists but type is 'active', it's not in pendingUsers
+            if (emailCacheResult.data && emailCacheResult.data.type === 'active') {
+                return false;
+            }
+        } catch (error) {
+            // Cache miss - proceed to direct document lookup
+        }
+        
+        // Direct document lookup (1 read instead of reading all documents)
+        try {
+            const pendingUserRef = this.db.collection('pendingUsers').doc(normalizedEmail);
+            const pendingSnap = await pendingUserRef.get();
+            return pendingSnap.exists;
+        } catch (error) {
+            console.error('Error checking pending user:', error);
+            return false;
+        }
     },
     
     async createPendingUser(userData) {
