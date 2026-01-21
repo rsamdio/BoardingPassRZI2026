@@ -16,39 +16,37 @@ const db = admin.firestore();
 const rtdb = admin.database();
 
 /**
- * Update leaderboard cache in RTDB
- * - Writes top 50 users for the leaderboard modal
- * - Computes and stores rank for **all** active attendees
+ * Update leaderboard cache in RTDB using pre-fetched attendee data.
+ * @param {Array<Object>} activeAttendees - Array of active attendee objects ({ id, points, ... }).
  */
-async function updateLeaderboardCache() {
+async function updateLeaderboardCacheFromSnapshot(activeAttendees) {
   try {
-    const usersSnapshot = await db.collection("users")
-        .where("role", "==", "attendee")
-        .where("status", "==", "active")
-        .orderBy("points", "desc")
-        .get();
+    const sorted = [...activeAttendees].sort((a, b) => {
+      const aPoints = a.points || 0;
+      const bPoints = b.points || 0;
+      return bPoints - aPoints;
+    });
 
     const leaderboardData = {};
     const rankUpdates = {};
     let index = 0;
 
-    usersSnapshot.forEach((doc) => {
-      const data = doc.data();
-      const points = data.points || 0;
+    sorted.forEach((user) => {
+      const points = user.points || 0;
       const rank = index + 1;
 
       // Build top 50 leaderboard data (index 0–49)
       if (index < 50) {
-      leaderboardData[index] = {
-        uid: doc.id,
-        name: data.name || data.displayName || "User",
-        email: data.email || null,
-        district: data.district || null,
-        designation: data.designation || null,
+        leaderboardData[index] = {
+          uid: user.id,
+          name: user.name || user.displayName || "User",
+          email: user.email || null,
+          district: user.district || null,
+          designation: user.designation || null,
           points: points,
-        photoURL: data.photoURL || data.photo || null,
-        photo: data.photoURL || data.photo || null, // Keep both for backward compatibility
-      };
+          photoURL: user.photoURL || user.photo || null,
+          photo: user.photoURL || user.photo || null, // Keep both for backward compatibility
+        };
       }
 
       // Rank data for this user (all users)
@@ -58,8 +56,8 @@ async function updateLeaderboardCache() {
         lastUpdated: Date.now(),
       };
 
-      rankUpdates[`ranks/${doc.id}`] = rankData;
-      rankUpdates[`cache/leaderboard/ranks/${doc.id}`] = rankData;
+      rankUpdates[`ranks/${user.id}`] = rankData;
+      rankUpdates[`cache/leaderboard/ranks/${user.id}`] = rankData;
 
       index++;
     });
@@ -67,7 +65,7 @@ async function updateLeaderboardCache() {
     // Fill remaining leaderboard slots with null if less than 50
     for (let i = index; i < 50; i++) {
       if (leaderboardData[i] === undefined) {
-      leaderboardData[i] = null;
+        leaderboardData[i] = null;
       }
     }
 
@@ -88,6 +86,30 @@ async function updateLeaderboardCache() {
       version: (existingMeta.version || 0) + 1,
       count: index,
     });
+  } catch (error) {
+    console.error("Error updating leaderboard cache from snapshot:", error);
+    // Non-critical, don't throw
+  }
+}
+
+/**
+ * Wrapper that preserves existing behavior by querying Firestore
+ * and then delegating to updateLeaderboardCacheFromSnapshot.
+ */
+async function updateLeaderboardCache() {
+  try {
+    const usersSnapshot = await db.collection("users")
+        .where("role", "==", "attendee")
+        .where("status", "==", "active")
+        .orderBy("points", "desc")
+        .get();
+
+    const activeAttendees = usersSnapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+
+    await updateLeaderboardCacheFromSnapshot(activeAttendees);
   } catch (error) {
     console.error("Error updating leaderboard cache:", error);
     // Non-critical, don't throw
@@ -160,21 +182,58 @@ async function updateAdminParticipantsCache() {
     const usersSnapshot = await db.collection("users")
         .where("role", "==", "attendee")
         .get();
-    const activeUsers = [];
-    usersSnapshot.forEach((doc) => {
-      const data = doc.data();
-      activeUsers.push({
-        uid: doc.id,
-        email: data.email,
-        name: data.name,
-        district: data.district,
-        designation: data.designation,
-        points: data.points || 0,
-        status: data.status || "active",
-        photo: data.photo || data.photoURL || null,
-        firstLoginAt: data.firstLoginAt ? data.firstLoginAt.toMillis() : null,
+    const allAttendees = usersSnapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+
+    // Delegate to the in-memory variant
+    await updateAdminParticipantsCacheFromSnapshot(allAttendees, pendingUsers);
+  } catch (error) {
+    console.error("Error updating admin participants cache:", error);
+    // Non-critical, don't throw
+  }
+}
+
+/**
+ * Update admin participants cache in RTDB using in-memory attendee data.
+ * @param {Array<Object>} allAttendees - Array of attendee objects ({ id, ... }).
+ * @param {Array<Object>} [pendingUsersPrefetched] - Optional pre-fetched pending users.
+ */
+async function updateAdminParticipantsCacheFromSnapshot(allAttendees, pendingUsersPrefetched) {
+  try {
+    let pendingUsers = pendingUsersPrefetched;
+
+    // Fetch pending users if not provided
+    if (!pendingUsers) {
+      const pendingUsersSnapshot = await db.collection("pendingUsers").get();
+      pendingUsers = [];
+      pendingUsersSnapshot.forEach((doc) => {
+        const data = doc.data();
+        pendingUsers.push({
+          email: doc.id,
+          name: data.name,
+          district: data.district,
+          designation: data.designation,
+          status: "pending",
+          createdAt: data.createdAt ? data.createdAt.toMillis() : Date.now(),
+        });
       });
-    });
+    }
+
+    const activeUsers = allAttendees.map((user) => ({
+      uid: user.id,
+      email: user.email,
+      name: user.name,
+      district: user.district,
+      designation: user.designation,
+      points: user.points || 0,
+      status: user.status || "active",
+      photo: user.photo || user.photoURL || null,
+      firstLoginAt: user.firstLoginAt
+        ? (user.firstLoginAt.toMillis ? user.firstLoginAt.toMillis() : user.firstLoginAt)
+        : null,
+    }));
 
     // Update RTDB cache
     await rtdb.ref("adminCache/participants").set({
@@ -183,7 +242,7 @@ async function updateAdminParticipantsCache() {
       lastUpdated: Date.now(),
     });
   } catch (error) {
-    console.error("Error updating admin participants cache:", error);
+    console.error("Error updating admin participants cache from snapshot:", error);
     // Non-critical, don't throw
   }
 }
@@ -200,39 +259,50 @@ async function updateAttendeeDirectoryCache() {
         .where("status", "==", "active")
         .get();
     
+    const activeAttendees = usersSnapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+
+    await updateAttendeeDirectoryCacheFromSnapshot(activeAttendees);
+  } catch (error) {
+    console.error("Error updating attendee directory cache:", error);
+    // Non-critical, don't throw
+  }
+}
+
+/**
+ * Update attendee directory cache in RTDB using in-memory active attendee data.
+ * @param {Array<Object>} activeAttendees - Array of active attendee objects ({ id, ... }).
+ */
+async function updateAttendeeDirectoryCacheFromSnapshot(activeAttendees) {
+  try {
     const directoryData = {};
     const userCacheUpdates = {};
     
-    usersSnapshot.forEach((doc) => {
-      const data = doc.data();
-      // Get name from name or displayName (displayName comes from Google auth)
-      const userName = data.name || data.displayName || null;
-      // Get photoURL from photoURL or photo (photoURL comes from Google auth, photo might be from old data)
-      // Also check for any other photo-related fields
-      const userPhotoURL = data.photoURL || data.photo || data.profilePhoto || null;
-      
-      if (!userPhotoURL && Object.keys(directoryData).length < 3) {
-      }
+    activeAttendees.forEach((user) => {
+      const userName = user.name || user.displayName || null;
+      const userPhotoURL = user.photoURL || user.photo || user.profilePhoto || null;
       
       const userData = {
-        uid: doc.id,
-        email: data.email || null,
+        uid: user.id,
+        email: user.email || null,
         name: userName,
-        displayName: data.displayName || userName, // Include displayName for compatibility
-        district: data.district || null,
-        designation: data.designation || null,
-        points: data.points || 0,
+        displayName: user.displayName || userName, // Include displayName for compatibility
+        district: user.district || null,
+        designation: user.designation || null,
+        points: user.points || 0,
         photoURL: userPhotoURL, // Ensure photoURL is included
         photo: userPhotoURL, // Keep both for compatibility
-        status: data.status || "active"
+        status: user.status || "active"
       };
       
-      directoryData[doc.id] = userData;
+      directoryData[user.id] = userData;
       
       // Also prepare individual user cache data
-      userCacheUpdates[`attendeeCache/users/${doc.id}`] = {
+      userCacheUpdates[`attendeeCache/users/${user.id}`] = {
         ...userData,
-        role: data.role || "attendee",
+        role: user.role || "attendee",
         lastUpdated: Date.now()
       };
     });
@@ -247,7 +317,34 @@ async function updateAttendeeDirectoryCache() {
     
     await rtdb.ref().update(updates);
   } catch (error) {
-    console.error("Error updating attendee directory cache:", error);
+    console.error("Error updating attendee directory cache from snapshot:", error);
+    // Non-critical, don't throw
+  }
+}
+
+/**
+ * Update all user-related caches (leaderboard, admin participants, attendee directory)
+ * using a single attendees snapshot (fetch-once, filter-in-memory pattern).
+ * @param {FirebaseFirestore.QuerySnapshot} allAttendeesSnapshot
+ */
+async function updateAllUserCaches(allAttendeesSnapshot) {
+  try {
+    const attendees = allAttendeesSnapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+
+    const activeAttendees = attendees.filter(
+        (user) => (user.status || "active") === "active",
+    );
+
+    await Promise.all([
+      updateLeaderboardCacheFromSnapshot(activeAttendees),
+      updateAdminParticipantsCacheFromSnapshot(attendees),
+      updateAttendeeDirectoryCacheFromSnapshot(activeAttendees),
+    ]);
+  } catch (error) {
+    console.error("Error updating all user caches from snapshot:", error);
     // Non-critical, don't throw
   }
 }
@@ -2071,10 +2168,6 @@ exports.onUserUpdate = onDocumentUpdated(
 
       // Check if points changed
       const pointsChanged = (before.points || 0) !== (after.points || 0);
-      if (pointsChanged) {
-        updates.push(updateLeaderboardCache()); // This now includes rank updates for all users
-        // updateUserRank() removed - rank is calculated in updateLeaderboardCache()
-      }
 
       // Check if user data changed (affects admin cache)
       const userDataChanged =
@@ -2083,6 +2176,9 @@ exports.onUserUpdate = onDocumentUpdated(
           (before.district !== after.district) ||
           (before.designation !== after.designation) ||
           (before.status !== after.status);
+
+      // Determine if we need to refresh user-related caches
+      const needUserCaches = pointsChanged || userDataChanged;
 
       // Check if points changed (affects stats)
       // Note: Points changes don't affect user counts, so we can skip incremental update
@@ -2107,8 +2203,6 @@ exports.onUserUpdate = onDocumentUpdated(
       }
 
       if (userDataChanged) {
-        updates.push(updateAdminParticipantsCache());
-        updates.push(updateAttendeeDirectoryCache()); // Also update attendee directory cache
         
         // Update email cache if email changed
         if (before.email !== after.email) {
@@ -2124,9 +2218,14 @@ exports.onUserUpdate = onDocumentUpdated(
       // Update attendee caches
       if (pointsChanged || userDataChanged) {
         updates.push(updateUserStatsCache(uid));
-        if (pointsChanged) {
-          updates.push(updateAttendeeDirectoryCache()); // Update directory when points change
-        }
+      }
+
+      // If caches need to be refreshed, do a single Firestore read and update all user caches
+      if (needUserCaches) {
+        const allAttendeesSnapshot = await db.collection("users")
+            .where("role", "==", "attendee")
+            .get();
+        updates.push(updateAllUserCaches(allAttendeesSnapshot));
       }
       
       // If user status changed to 'active', generate activity lists (new users start as 'pending')
@@ -2159,10 +2258,12 @@ exports.onUserCreate = onDocumentCreated(
         return null;
       }
 
+      const allAttendeesSnapshot = await db.collection("users")
+          .where("role", "==", "attendee")
+          .get();
+
       const updates = [
-        updateLeaderboardCache(), // This now includes rank updates for all users
-        updateAdminParticipantsCache(),
-        updateAttendeeDirectoryCache(), // Also update attendee directory cache
+        updateAllUserCaches(allAttendeesSnapshot),
         updateAdminStatsCache({
           totalUsers: 1,
           activeUsers: userData.status === 'active' ? 1 : 0
