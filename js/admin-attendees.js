@@ -808,7 +808,9 @@ const AdminAttendees = {
                 // 1. Check RTDB email cache first (0 Firestore reads)
                 let emailExists = false;
                 try {
-                    const emailCacheResult = await DB.readFromCache(`adminCache/emails/${normalizedEmail}`);
+                    // Sanitize email for RTDB key (removes invalid characters like ., $, #, [, ])
+                    const sanitizedKey = DB._sanitizeEmailForRTDBKey(normalizedEmail);
+                    const emailCacheResult = await DB.readFromCache(`adminCache/emails/${sanitizedKey}`);
                     if (emailCacheResult.data && emailCacheResult.data.uid) {
                         // Email exists in cache (either pending or active)
                         emailExists = true;

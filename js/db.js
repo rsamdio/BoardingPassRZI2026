@@ -828,14 +828,14 @@ const DB = {
     
     /**
      * Sanitize email for use as RTDB key
-     * RTDB keys cannot contain: $, #, [, ]
-     * Note: . (dot) is allowed in RTDB keys
+     * RTDB keys cannot contain: ., $, #, [, ]
      */
     _sanitizeEmailForRTDBKey(email) {
         if (!email) return null;
         return email
             .toLowerCase()
             .trim()
+            .replace(/\./g, '_DOT_')
             .replace(/\$/g, '_DOLLAR_')
             .replace(/#/g, '_HASH_')
             .replace(/\[/g, '_LBRACK_')

@@ -18,14 +18,14 @@ const PENDING_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 /**
  * Sanitize email for use as RTDB key
- * RTDB keys cannot contain: $, #, [, ]
- * Note: . (dot) is allowed in RTDB keys
+ * RTDB keys cannot contain: ., $, #, [, ]
  */
 function sanitizeEmailForRTDBKey(email) {
   if (!email) return null;
   return email
     .toLowerCase()
     .trim()
+    .replace(/\./g, '_DOT_')
     .replace(/\$/g, '_DOLLAR_')
     .replace(/#/g, '_HASH_')
     .replace(/\[/g, '_LBRACK_')
