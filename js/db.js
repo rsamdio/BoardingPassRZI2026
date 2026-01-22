@@ -827,6 +827,22 @@ const DB = {
     },
     
     /**
+     * Sanitize email for use as RTDB key
+     * RTDB keys cannot contain: $, #, [, ]
+     * Note: . (dot) is allowed in RTDB keys
+     */
+    _sanitizeEmailForRTDBKey(email) {
+        if (!email) return null;
+        return email
+            .toLowerCase()
+            .trim()
+            .replace(/\$/g, '_DOLLAR_')
+            .replace(/#/g, '_HASH_')
+            .replace(/\[/g, '_LBRACK_')
+            .replace(/\]/g, '_RBRACK_');
+    },
+    
+    /**
      * Check if a specific email exists in pendingUsers using direct document lookup
      * This is MUCH more efficient than getPendingUsers() - only 1 read instead of reading all documents
      * @param {string} email - Email to check (will be normalized)
@@ -836,10 +852,11 @@ const DB = {
         if (!email) return false;
         
         const normalizedEmail = email.toLowerCase().trim();
+        const sanitizedKey = this._sanitizeEmailForRTDBKey(email);
         
         // Try RTDB email cache first (cheapest - 0 Firestore reads)
         try {
-            const emailCacheResult = await this.readFromCache(`adminCache/emails/${normalizedEmail}`);
+            const emailCacheResult = await this.readFromCache(`adminCache/emails/${sanitizedKey}`);
             if (emailCacheResult.data && emailCacheResult.data.type === 'pending') {
                 return true;
             }
