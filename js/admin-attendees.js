@@ -21,6 +21,79 @@ const AdminAttendees = {
         totalPages: 1
     },
     selectedAttendees: new Set(),
+    participantsListener: null,
+    
+    /**
+     * Setup real-time listener for participants cache
+     * Automatically refreshes the list when attendees are created/updated/deleted
+     */
+    setupRealtimeListener() {
+        // Remove existing listener if any
+        if (this.participantsListener) {
+            DB.rtdb.ref('adminCache/participants').off('value', this.participantsListener);
+            this.participantsListener = null;
+        }
+        
+        // Create new listener
+        this.participantsListener = (snapshot) => {
+            if (snapshot.exists() && !this.loading) {
+                const cacheData = snapshot.val();
+                // Metadata is stored separately in adminCache/metadata, not inside participants
+                // We'll get lastSynced from the cacheData.lastUpdated if available
+                const lastSynced = cacheData.lastUpdated || null;
+                const isFresh = lastSynced ? (Date.now() - lastSynced) < (10 * 60 * 1000) : false;
+                
+                // Map active users
+                const active = Array.isArray(cacheData.active) ? cacheData.active.map(u => ({
+                    uid: u.uid,
+                    email: u.email,
+                    name: u.name,
+                    phone: u.phone || null,
+                    district: u.district,
+                    designation: u.designation,
+                    points: u.points || 0,
+                    photoURL: u.photoURL || u.photo,
+                    status: u.status || 'active'
+                })) : [];
+                
+                // Map pending users
+                const pending = Array.isArray(cacheData.pending) ? cacheData.pending.map(p => ({
+                    email: p.email,
+                    name: p.name,
+                    phone: p.phone || null,
+                    district: p.district,
+                    designation: p.designation,
+                    uid: null,
+                    points: 0,
+                    photoURL: p.photoURL || p.photo,
+                    status: 'pending'
+                })) : [];
+                
+                // Update local state
+                this.attendees = [...active, ...pending];
+                this.lastSynced = lastSynced;
+                this.stale = !isFresh;
+                
+                // Re-apply filters and render
+                this.applyFilters();
+                this.render();
+                this.updateSyncIndicator();
+            }
+        };
+        
+        // Attach listener
+        DB.rtdb.ref('adminCache/participants').on('value', this.participantsListener);
+    },
+    
+    /**
+     * Cleanup: Remove real-time listener
+     */
+    cleanup() {
+        if (this.participantsListener) {
+            DB.rtdb.ref('adminCache/participants').off('value', this.participantsListener);
+            this.participantsListener = null;
+        }
+    },
     
     /**
      * Load attendees
@@ -38,6 +111,9 @@ const AdminAttendees = {
             this.stale = !!attendees?.stale;
             this.render();
             this.updateSyncIndicator();
+            
+            // Setup real-time listener after initial load
+            this.setupRealtimeListener();
         } catch (error) {
             console.error('Error loading attendees:', error);
             Toast.error('Failed to load attendees');
@@ -741,6 +817,11 @@ const AdminAttendees = {
             districtInput.value = attendee.district || '';
             designationInput.value = attendee.designation || '';
             
+            // Store original email for comparison when saving (to detect email changes)
+            if (emailInput) {
+                emailInput.dataset.originalEmail = attendee.email || '';
+            }
+            
             // Status is auto-determined: active if has uid, pending if not
             const displayStatus = attendee.uid ? (attendee.status || 'active') : 'pending';
             statusSelect.value = displayStatus;
@@ -799,52 +880,69 @@ const AdminAttendees = {
                 await DB.updateUser(uid, data);
                 Toast.success('Attendee updated successfully');
             } else {
-                // For new attendees, include email
-                data.email = email;
-                // Check if email already exists
+                // Handle pending user (either update existing or create new)
                 const normalizedEmail = email.toLowerCase().trim();
                 
-                // Check if email exists using optimized methods (no full collection scans)
-                // 1. Check RTDB email cache first (0 Firestore reads)
-                let emailExists = false;
-                try {
-                    // Sanitize email for RTDB key (removes invalid characters like ., $, #, [, ])
-                    const sanitizedKey = DB._sanitizeEmailForRTDBKey(normalizedEmail);
-                    const emailCacheResult = await DB.readFromCache(`adminCache/emails/${sanitizedKey}`);
-                    if (emailCacheResult.data && emailCacheResult.data.uid) {
-                        // Email exists in cache (either pending or active)
-                        emailExists = true;
-                    }
-                } catch (error) {
-                    // Cache miss - proceed to direct lookups
-                }
+                // Check if we're editing an existing pending user
+                // Find by checking if email input has a data attribute or find in attendees list
+                const emailInput = document.getElementById('attendee-email');
+                const originalEmail = emailInput?.dataset?.originalEmail || 
+                                     (this.attendees.find(a => !a.uid && a.email === normalizedEmail)?.email);
                 
-                // 2. If not in cache, check with direct document lookups (1-2 reads total)
-                if (!emailExists) {
-                    const [pendingExists, activeUser] = await Promise.all([
-                        DB.checkPendingUserExists(normalizedEmail), // 1 read (direct doc lookup)
-                        // Query Firestore directly for active users (1 read max with limit)
-                        DB.db.collection('users')
-                            .where('email', '==', normalizedEmail)
-                            .limit(1)
-                            .get()
-                            .then(snapshot => snapshot.docs.length > 0 ? { uid: snapshot.docs[0].id, ...snapshot.docs[0].data() } : null)
-                            .catch(() => null)
-                    ]);
+                if (originalEmail && originalEmail.toLowerCase().trim() === normalizedEmail) {
+                    // Updating existing pending user (email unchanged)
+                    data.email = normalizedEmail;
+                    await DB.db.collection('pendingUsers').doc(normalizedEmail).update(data);
+                    Toast.success('Attendee updated successfully');
+                } else {
+                    // Either email changed OR creating new pending user
+                    // First check if email already exists
+                    let emailExists = false;
+                    try {
+                        const sanitizedKey = DB._sanitizeEmailForRTDBKey(normalizedEmail);
+                        const emailCacheResult = await DB.readFromCache(`adminCache/emails/${sanitizedKey}`);
+                        if (emailCacheResult.data && emailCacheResult.data.uid) {
+                            emailExists = true;
+                        }
+                    } catch (error) {
+                        // Cache miss - proceed to direct lookups
+                    }
                     
-                    if (pendingExists || activeUser) {
-                        emailExists = true;
+                    if (!emailExists) {
+                        const [pendingExists, activeUser] = await Promise.all([
+                            DB.checkPendingUserExists(normalizedEmail),
+                            DB.db.collection('users')
+                                .where('email', '==', normalizedEmail)
+                                .limit(1)
+                                .get()
+                                .then(snapshot => snapshot.docs.length > 0 ? { uid: snapshot.docs[0].id, ...snapshot.docs[0].data() } : null)
+                                .catch(() => null)
+                        ]);
+                        
+                        if (pendingExists || activeUser) {
+                            emailExists = true;
+                        }
+                    }
+                    
+                    if (emailExists) {
+                        Toast.error('This email is already registered');
+                        return;
+                    }
+                    
+                    // If original email exists and is different, delete old one
+                    if (originalEmail && originalEmail.toLowerCase().trim() !== normalizedEmail) {
+                        const oldNormalizedEmail = originalEmail.toLowerCase().trim();
+                        await DB.db.collection('pendingUsers').doc(oldNormalizedEmail).delete();
+                        Toast.success('Attendee updated successfully (email changed)');
+                    }
+                    
+                    // Create/update with new email
+                    data.email = normalizedEmail;
+                    await DB.createPendingUser(data);
+                    if (!originalEmail) {
+                        Toast.success('Attendee added successfully. They will be activated on first login.');
                     }
                 }
-                
-                if (emailExists) {
-                    Toast.error('This email is already registered');
-                    return;
-                }
-                
-                // Create in pendingUsers (will be migrated to users on first login)
-                await DB.createPendingUser(data);
-                Toast.success('Attendee added successfully. They will be activated on first login.');
             }
             
             // Invalidate cache

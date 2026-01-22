@@ -41,6 +41,9 @@ const AdminUI = {
             if (this.currentView === 'forms' && typeof AdminForms !== 'undefined') {
                 AdminForms.cleanup();
             }
+            if (this.currentView === 'attendees' && typeof AdminAttendees !== 'undefined') {
+                AdminAttendees.cleanup();
+            }
             
             // Clear memory cache when navigating away from admin panel (if leaving admin entirely)
             // Note: We keep cache during admin panel navigation for performance
