@@ -5,6 +5,8 @@ const AdminAttendees = {
     attendees: [],
     filteredAttendees: [],
     loading: false,
+    lastSynced: null,
+    stale: false,
     currentFilters: {
         search: '',
         status: 'all',
@@ -30,15 +32,73 @@ const AdminAttendees = {
         
         try {
             this.loading = true;
-            this.attendees = await DB.getAllAttendees();
+            const attendees = await DB.getAllAttendees({ forceRefresh: false });
+            this.attendees = Array.isArray(attendees) ? attendees : [];
+            this.lastSynced = attendees?.lastSynced || null;
+            this.stale = !!attendees?.stale;
             this.render();
+            this.updateSyncIndicator();
         } catch (error) {
             console.error('Error loading attendees:', error);
             Toast.error('Failed to load attendees');
             this.attendees = [];
+            this.stale = true;
+            this.updateSyncIndicator();
         } finally {
             this.loading = false;
         }
+    },
+
+    async syncNow() {
+        if (this.loading) return;
+        try {
+            this.loading = true;
+            const attendees = await DB.getAllAttendees({ forceRefresh: true });
+            this.attendees = Array.isArray(attendees) ? attendees : [];
+            this.lastSynced = attendees?.lastSynced || Date.now();
+            this.stale = !!attendees?.stale;
+            this.render();
+            this.updateSyncIndicator();
+            Toast.success('Synced attendees from Firestore');
+        } catch (error) {
+            console.error('Error syncing attendees:', error);
+            Toast.error('Failed to sync attendees');
+        } finally {
+            this.loading = false;
+        }
+    },
+
+    updateSyncIndicator() {
+        const statusEl = document.getElementById('attendees-sync-state');
+        const timeEl = document.getElementById('attendees-last-sync');
+        const lastText = this.lastSynced ? this.formatRelativeTime(this.lastSynced) : 'No cache';
+        if (timeEl) {
+            timeEl.textContent = `Last synced: ${lastText}`;
+        }
+        if (statusEl) {
+            if (this.stale) {
+                statusEl.textContent = 'STALE';
+                statusEl.className = 'px-3 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-700';
+            } else {
+                statusEl.textContent = 'FRESH';
+                statusEl.className = 'px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700';
+            }
+        }
+    },
+
+    formatRelativeTime(timestamp) {
+        const now = Date.now();
+        const diffMs = now - timestamp;
+        if (diffMs < 0) return 'just now';
+        const minutes = Math.floor(diffMs / (60 * 1000));
+        if (minutes < 1) return 'just now';
+        if (minutes === 1) return '1 minute ago';
+        if (minutes < 60) return `${minutes} minutes ago`;
+        const hours = Math.floor(minutes / 60);
+        if (hours === 1) return '1 hour ago';
+        if (hours < 24) return `${hours} hours ago`;
+        const days = Math.floor(hours / 24);
+        return days === 1 ? '1 day ago' : `${days} days ago`;
     },
     
     /**

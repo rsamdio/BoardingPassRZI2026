@@ -14,6 +14,135 @@ admin.initializeApp();
 const region = "us-central1";
 const db = admin.firestore();
 const rtdb = admin.database();
+const PENDING_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Sanitize email for use as RTDB key
+ * RTDB keys cannot contain: $, #, [, ]
+ * Note: . (dot) is allowed in RTDB keys
+ */
+function sanitizeEmailForRTDBKey(email) {
+  if (!email) return null;
+  return email
+    .toLowerCase()
+    .trim()
+    .replace(/\$/g, '_DOLLAR_')
+    .replace(/#/g, '_HASH_')
+    .replace(/\[/g, '_LBRACK_')
+    .replace(/\]/g, '_RBRACK_');
+}
+
+function isFreshTimestamp(lastUpdated, ttlMs = PENDING_CACHE_TTL_MS) {
+  return typeof lastUpdated === "number" && Date.now() - lastUpdated < ttlMs;
+}
+
+function mapPendingUserData(email, data) {
+  const normalizedEmail = email ? email.toLowerCase().trim() : null;
+  return {
+    email: normalizedEmail,
+    name: data?.name || null,
+    district: data?.district || null,
+    designation: data?.designation || null,
+    phone: data?.phone || null,
+    status: "pending",
+    createdAt: data?.createdAt
+      ? (data.createdAt.toMillis ? data.createdAt.toMillis() : data.createdAt)
+      : Date.now(),
+  };
+}
+
+async function writePendingCache(pendingUsers, pendingCount, timestamp) {
+  const count = typeof pendingCount === "number" ? pendingCount : (pendingUsers || []).length;
+  const ts = timestamp || Date.now();
+  const updates = {
+    "adminCache/participants/pending": pendingUsers || [],
+    "adminCache/participants/lastUpdated": ts,
+    "adminCache/metadata/pendingCount": count,
+    "adminCache/metadata/lastUpdated": ts,
+  };
+  await rtdb.ref().update(updates);
+  return { pendingCount: count, lastUpdated: ts };
+}
+
+async function refreshPendingUsers(force = false) {
+  const [pendingSnap, metaSnap] = await Promise.all([
+    rtdb.ref("adminCache/participants/pending").once("value"),
+    rtdb.ref("adminCache/metadata").once("value"),
+  ]);
+
+  const pendingCached = pendingSnap.exists() ? pendingSnap.val() : [];
+  const metadata = metaSnap.exists() ? metaSnap.val() : {};
+  const lastUpdated = metadata.lastUpdated || null;
+  const pendingCount = metadata.pendingCount || (Array.isArray(pendingCached) ? pendingCached.length : 0);
+
+  if (!force && isFreshTimestamp(lastUpdated)) {
+    return {
+      pendingUsers: Array.isArray(pendingCached) ? pendingCached : [],
+      pendingCount,
+      lastUpdated,
+      fromCache: true,
+    };
+  }
+
+  const snapshot = await db.collection("pendingUsers").get();
+  const pendingUsers = [];
+  snapshot.forEach((doc) => {
+    pendingUsers.push(mapPendingUserData(doc.id, doc.data()));
+  });
+
+  const ts = Date.now();
+  await writePendingCache(pendingUsers, pendingUsers.length, ts);
+
+  return {
+    pendingUsers,
+    pendingCount: pendingUsers.length,
+    lastUpdated: ts,
+    fromCache: false,
+  };
+}
+
+async function applyPendingUserChange(email, pendingData, action) {
+  if (!email) return { pendingCount: 0 };
+  const normalizedEmail = email.toLowerCase().trim();
+
+  const [pendingSnap, metaSnap] = await Promise.all([
+    rtdb.ref("adminCache/participants/pending").once("value"),
+    rtdb.ref("adminCache/metadata").once("value"),
+  ]);
+
+  const pendingListRaw = pendingSnap.exists() ? pendingSnap.val() : [];
+  const pendingList = Array.isArray(pendingListRaw) ? pendingListRaw.filter(Boolean) : [];
+  const metadata = metaSnap.exists() ? metaSnap.val() : {};
+  let pendingCount = typeof metadata.pendingCount === "number" ? metadata.pendingCount : pendingList.length;
+
+  const timestamp = Date.now();
+  const existingIndex = pendingList.findIndex(
+      (p) => p && p.email && p.email.toLowerCase().trim() === normalizedEmail);
+
+  if (action === "delete") {
+    if (existingIndex !== -1) {
+      pendingList.splice(existingIndex, 1);
+      pendingCount = Math.max(0, pendingCount - 1);
+    }
+  } else {
+    const entry = mapPendingUserData(normalizedEmail, pendingData);
+    if (existingIndex === -1) {
+      pendingList.push(entry);
+      pendingCount += 1;
+    } else {
+      const existing = pendingList[existingIndex] || {};
+      const merged = { ...existing, ...entry };
+      // Preserve original createdAt if present
+      if (existing.createdAt && !pendingData?.createdAt) {
+        merged.createdAt = existing.createdAt;
+      }
+      pendingList[existingIndex] = merged;
+    }
+  }
+
+  await writePendingCache(pendingList, pendingCount, timestamp);
+  return { pendingCount, lastUpdated: timestamp };
+}
 
 /**
  * Update leaderboard cache in RTDB using pre-fetched attendee data.
@@ -161,34 +290,31 @@ async function updateUserRank(uid, points) {
  * Update admin participants cache in RTDB
  * Fetches all pending and active users from Firestore
  */
-async function updateAdminParticipantsCache() {
+async function updateAdminParticipantsCache(force = false, allAttendeesPrefetched = null, pendingUsersPrefetched = null) {
   try {
-    // Fetch pending users
-    const pendingUsersSnapshot = await db.collection("pendingUsers").get();
-    const pendingUsers = [];
-    pendingUsersSnapshot.forEach((doc) => {
-      const data = doc.data();
-      pendingUsers.push({
-        email: doc.id,
-        name: data.name,
-        district: data.district,
-        designation: data.designation,
-        status: "pending",
-        createdAt: data.createdAt ? data.createdAt.toMillis() : Date.now(),
-      });
-    });
+    // RTDB-first pending users; only hit Firestore if forced or stale
+    const pendingResult = pendingUsersPrefetched
+      ? {
+          pendingUsers: pendingUsersPrefetched,
+          pendingCount: pendingUsersPrefetched.length,
+          lastUpdated: Date.now(),
+          fromCache: true,
+        }
+      : await refreshPendingUsers(force);
 
-    // Fetch active users
-    const usersSnapshot = await db.collection("users")
-        .where("role", "==", "attendee")
-        .get();
-    const allAttendees = usersSnapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
+    let allAttendees = allAttendeesPrefetched;
+    if (!allAttendees) {
+      const usersSnapshot = await db.collection("users")
+          .where("role", "==", "attendee")
+          .get();
+      allAttendees = usersSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+    }
 
     // Delegate to the in-memory variant
-    await updateAdminParticipantsCacheFromSnapshot(allAttendees, pendingUsers);
+    await updateAdminParticipantsCacheFromSnapshot(allAttendees, pendingResult.pendingUsers, pendingResult);
   } catch (error) {
     console.error("Error updating admin participants cache:", error);
     // Non-critical, don't throw
@@ -199,26 +325,16 @@ async function updateAdminParticipantsCache() {
  * Update admin participants cache in RTDB using in-memory attendee data.
  * @param {Array<Object>} allAttendees - Array of attendee objects ({ id, ... }).
  * @param {Array<Object>} [pendingUsersPrefetched] - Optional pre-fetched pending users.
+ * @param {Object} [pendingMetadata] - Optional pending metadata ({pendingCount,lastUpdated})
  */
-async function updateAdminParticipantsCacheFromSnapshot(allAttendees, pendingUsersPrefetched) {
+async function updateAdminParticipantsCacheFromSnapshot(allAttendees, pendingUsersPrefetched, pendingMetadata = {}) {
   try {
     let pendingUsers = pendingUsersPrefetched;
-
     // Fetch pending users if not provided
     if (!pendingUsers) {
-      const pendingUsersSnapshot = await db.collection("pendingUsers").get();
-      pendingUsers = [];
-      pendingUsersSnapshot.forEach((doc) => {
-        const data = doc.data();
-        pendingUsers.push({
-          email: doc.id,
-          name: data.name,
-          district: data.district,
-          designation: data.designation,
-          status: "pending",
-          createdAt: data.createdAt ? data.createdAt.toMillis() : Date.now(),
-        });
-      });
+      const pendingResult = await refreshPendingUsers(true);
+      pendingUsers = pendingResult.pendingUsers;
+      pendingMetadata = pendingResult;
     }
 
     const activeUsers = allAttendees.map((user) => ({
@@ -235,12 +351,22 @@ async function updateAdminParticipantsCacheFromSnapshot(allAttendees, pendingUse
         : null,
     }));
 
+    const timestamp = pendingMetadata.lastUpdated || Date.now();
+    const pendingCount = typeof pendingMetadata.pendingCount === "number"
+      ? pendingMetadata.pendingCount
+      : pendingUsers.length;
+
     // Update RTDB cache
-    await rtdb.ref("adminCache/participants").set({
-      pending: pendingUsers,
-      active: activeUsers,
-      lastUpdated: Date.now(),
-    });
+    const updates = {
+      "adminCache/participants": {
+        pending: pendingUsers,
+        active: activeUsers,
+        lastUpdated: timestamp,
+      },
+      "adminCache/metadata/pendingCount": pendingCount,
+      "adminCache/metadata/lastUpdated": timestamp,
+    };
+    await rtdb.ref().update(updates);
   } catch (error) {
     console.error("Error updating admin participants cache from snapshot:", error);
     // Non-critical, don't throw
@@ -541,13 +667,13 @@ async function syncAdminsToRTDB() {
  */
 async function updateEmailCache(email, uid, type, isDelete = false) {
   if (!email) return;
-  const normalizedEmail = email.toLowerCase().trim();
+  const sanitizedKey = sanitizeEmailForRTDBKey(email);
 
   try {
     if (isDelete) {
-      await rtdb.ref(`adminCache/emails/${normalizedEmail}`).remove();
+      await rtdb.ref(`adminCache/emails/${sanitizedKey}`).remove();
     } else {
-      await rtdb.ref(`adminCache/emails/${normalizedEmail}`).set({
+      await rtdb.ref(`adminCache/emails/${sanitizedKey}`).set({
         uid: uid,
         type: type, // "pending" or "active"
         lastUpdated: Date.now(),
@@ -2299,7 +2425,7 @@ exports.onPendingUserCreate = onDocumentCreated(
       const email = event.params.email;
 
       const updates = [
-        updateAdminParticipantsCache(),
+        applyPendingUserChange(email, pendingData, "create"),
         updateAdminStatsCache({
           totalUsers: 1,
           pendingUsers: 1
@@ -2321,8 +2447,10 @@ exports.onPendingUserUpdate = onDocumentUpdated(
       region: region,
     },
     async (event) => {
+      const email = event.params.email;
+      const pendingData = event.data.after.data();
       const updates = [
-        updateAdminParticipantsCache(),
+        applyPendingUserChange(email, pendingData, "update"),
         updateAdminStatsCache(),
       ];
       await Promise.all(updates);
@@ -2342,7 +2470,7 @@ exports.onPendingUserDelete = onDocumentDeleted(
       const email = event.params.email;
 
       const updates = [
-        updateAdminParticipantsCache(),
+        applyPendingUserChange(email, null, "delete"),
         updateAdminStatsCache({
           totalUsers: -1,
           pendingUsers: -1

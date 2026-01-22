@@ -278,7 +278,15 @@
             <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
                 <div class="flex justify-between items-center mb-6">
                     <h3 class="font-bold text-xl text-slate-800">Attendees Management</h3>
-                    <div class="flex gap-2">
+                    <div class="flex items-center gap-3">
+                        <div class="text-xs text-slate-500 flex flex-col items-end">
+                            <span id="attendees-last-sync">Last synced: -</span>
+                            <span id="attendees-sync-state" class="px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">-</span>
+                        </div>
+                        <button onclick="AdminAttendees.syncNow()" class="bg-white border border-slate-200 text-slate-700 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors flex items-center gap-2 text-sm">
+                            <i class="fas fa-sync-alt"></i>
+                            <span>Sync Now</span>
+                        </button>
                         <button onclick="AdminAttendees.exportAttendees()" class="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2">
                             <i class="fas fa-download"></i> Export CSV
                         </button>

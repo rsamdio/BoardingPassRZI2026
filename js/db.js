@@ -759,44 +759,71 @@ const DB = {
      * Get all pending users - tries RTDB cache first, falls back to Firestore
      * WARNING: This reads the entire collection. Use checkPendingUserExists() for single email checks.
      */
-    async getPendingUsers() {
+    async getPendingUsers(options = {}) {
+        const { forceRefresh = false } = options;
+        let lastSynced = null;
+        let stale = true;
+        
         // Try RTDB cache first (cheap read)
         try {
-            const cacheRef = this.rtdb.ref('adminCache/participants');
-            const cacheSnap = await new Promise((resolve, reject) => {
-                cacheRef.once('value', resolve, reject);
-            });
+            const [pendingSnap, metaSnap] = await Promise.all([
+                this.rtdb.ref('adminCache/participants/pending').once('value'),
+                this.rtdb.ref('adminCache/metadata').once('value')
+            ]);
             
-            if (cacheSnap.exists()) {
-                const cacheData = cacheSnap.val();
-                const lastUpdated = cacheData.lastUpdated || 0;
-                const now = Date.now();
-                const staleThreshold = 5 * 60 * 1000; // 5 minutes
-                
-                // Use cache if not stale
-                if (now - lastUpdated < staleThreshold && cacheData.pending) {
-                    return cacheData.pending.map(p => ({
-                        email: p.email,
-                        ...p,
-                        uid: null,
-                        points: 0,
-                        status: 'pending'
-                    }));
-                }
+            const pendingData = pendingSnap.exists() ? pendingSnap.val() : [];
+            const metadata = metaSnap.exists() ? metaSnap.val() : {};
+            lastSynced = metadata.lastUpdated || null;
+            const isFresh = lastSynced ? (Date.now() - lastSynced) < (10 * 60 * 1000) : false;
+            stale = !isFresh;
+            
+            if (!forceRefresh && Array.isArray(pendingData) && pendingData.length >= 0) {
+                const pending = pendingData.map(p => ({
+                    email: p.email,
+                    ...p,
+                    uid: null,
+                    points: 0,
+                    status: 'pending'
+                }));
+                pending.lastSynced = lastSynced;
+                pending.stale = stale;
+                return pending;
             }
         } catch (error) {
-            // Cache miss or error - fall back to Firestore
+            // Cache miss - optionally fall through to Firestore if forced
         }
         
-        // Fallback to Firestore (expensive - reads all documents)
+        if (!forceRefresh) {
+            // If cache is completely missing (first deploy), do read-through to Firestore
+            if (lastSynced === null && (!pendingData || pendingData.length === 0)) {
+                console.log('[getPendingUsers] Cache empty on first access, doing read-through');
+                return await this.getPendingUsers({ forceRefresh: true });
+            }
+            // Otherwise return cached data (even if stale)
+            const pending = (pendingData || []).map(p => ({
+                email: p.email,
+                ...p,
+                uid: null,
+                points: 0,
+                status: 'pending'
+            }));
+            pending.lastSynced = lastSynced;
+            pending.stale = stale;
+            return pending;
+        }
+        
+        // Explicit hard refresh (expensive - reads entire collection)
         const snapshot = await this.db.collection('pendingUsers').get();
-        return snapshot.docs.map(doc => ({
+        const pending = snapshot.docs.map(doc => ({
             email: doc.id,
             ...doc.data(),
             uid: null,
             points: 0,
             status: 'pending'
         }));
+        pending.lastSynced = Date.now();
+        pending.stale = false;
+        return pending;
     },
     
     /**
@@ -849,53 +876,94 @@ const DB = {
         return { email: normalizedEmail, ...userData };
     },
     
-    async getAllAttendees() {
-        // Try RTDB cache first (cheap read) - but only if admin is synced
-        // If permission denied, fall back to Firestore immediately
+    async getAllAttendees(options = {}) {
+        const { forceRefresh = false } = options;
+        let lastSynced = null;
+        let stale = true;
+        
+        // Try RTDB cache first (cheap read)
         try {
-            const cacheRef = this.rtdb.ref('adminCache/participants');
-            const cacheSnap = await new Promise((resolve, reject) => {
-                cacheRef.once('value', resolve, reject);
-            });
+            const [participantsSnap, metadataSnap] = await Promise.all([
+                this.rtdb.ref('adminCache/participants').once('value'),
+                this.rtdb.ref('adminCache/metadata').once('value')
+            ]);
             
-            if (cacheSnap.exists()) {
-                const cacheData = cacheSnap.val();
-                const lastUpdated = cacheData.lastUpdated || 0;
-                const now = Date.now();
-                const staleThreshold = 5 * 60 * 1000; // 5 minutes
+            if (participantsSnap.exists()) {
+                const cacheData = participantsSnap.val();
+                const metadata = metadataSnap.exists() ? metadataSnap.val() : {};
+                lastSynced = metadata.lastUpdated || cacheData.lastUpdated || null;
+                const isFresh = lastSynced ? (Date.now() - lastSynced) < (10 * 60 * 1000) : false;
+                stale = !isFresh;
                 
-                // Use cache if not stale
-                if (now - lastUpdated < staleThreshold && cacheData.active && cacheData.pending) {
-                    const active = cacheData.active.map(u => ({
-                        uid: u.uid,
-                        email: u.email,
-                        name: u.name,
-                        district: u.district,
-                        designation: u.designation,
-                        points: u.points || 0,
-                        photoURL: u.photoURL || u.photo, // Use photoURL (fallback to photo for backward compatibility)
-                        status: u.status || 'active'
-                    }));
-                    
-                    const pending = cacheData.pending.map(p => ({
-                        email: p.email,
-                        name: p.name,
-                        district: p.district,
-                        designation: p.designation,
-                        uid: null,
-                        points: 0,
-                        photoURL: p.photoURL || p.photo, // Use photoURL (fallback to photo for backward compatibility)
-                        status: 'pending'
-                    }));
-                    
-                    return [...active, ...pending];
+                const active = Array.isArray(cacheData.active) ? cacheData.active.map(u => ({
+                    uid: u.uid,
+                    email: u.email,
+                    name: u.name,
+                    district: u.district,
+                    designation: u.designation,
+                    points: u.points || 0,
+                    photoURL: u.photoURL || u.photo, // Use photoURL (fallback to photo for backward compatibility)
+                    status: u.status || 'active'
+                })) : [];
+                
+                const pending = Array.isArray(cacheData.pending) ? cacheData.pending.map(p => ({
+                    email: p.email,
+                    name: p.name,
+                    district: p.district,
+                    designation: p.designation,
+                    uid: null,
+                    points: 0,
+                    photoURL: p.photoURL || p.photo, // Use photoURL (fallback to photo for backward compatibility)
+                    status: 'pending'
+                })) : [];
+                
+                if (!forceRefresh || (isFresh && (active.length || pending.length))) {
+                    const attendees = [...active, ...pending];
+                    attendees.lastSynced = lastSynced;
+                    attendees.stale = stale;
+                    return attendees;
                 }
             }
         } catch (error) {
-            // Permission denied - admin not synced to RTDB yet, fall back to Firestore
+            // Cache miss - fall through to Firestore only if forced
         }
         
-        // Fallback to Firestore
+        if (!forceRefresh) {
+            // If cache is completely missing (first deploy), do read-through to Firestore
+            if (lastSynced === null && (!participantsSnap.exists() || (!cacheData.active && !cacheData.pending))) {
+                console.log('[getAllAttendees] Cache empty on first access, doing read-through');
+                return await this.getAllAttendees({ forceRefresh: true });
+            }
+            // Otherwise return cached data (even if stale)
+            const active = Array.isArray(cacheData?.active) ? cacheData.active.map(u => ({
+                uid: u.uid,
+                email: u.email,
+                name: u.name,
+                district: u.district,
+                designation: u.designation,
+                points: u.points || 0,
+                photoURL: u.photoURL || u.photo,
+                status: u.status || 'active'
+            })) : [];
+            
+            const pending = Array.isArray(cacheData?.pending) ? cacheData.pending.map(p => ({
+                email: p.email,
+                name: p.name,
+                district: p.district,
+                designation: p.designation,
+                uid: null,
+                points: 0,
+                photoURL: p.photoURL || p.photo,
+                status: 'pending'
+            })) : [];
+            
+            const attendees = [...active, ...pending];
+            attendees.lastSynced = lastSynced;
+            attendees.stale = stale;
+            return attendees;
+        }
+        
+        // Explicit hard refresh (expensive - reads entire collections)
         const [usersSnapshot, pendingSnapshot] = await Promise.all([
             this.db.collection('users').where('role', '==', 'attendee').get(),
             this.db.collection('pendingUsers').get()
@@ -910,7 +978,10 @@ const DB = {
             status: 'pending'
         }));
         
-        return [...users, ...pending];
+        const attendees = [...users, ...pending];
+        attendees.lastSynced = Date.now();
+        attendees.stale = false;
+        return attendees;
     },
     
     // Get user's leaderboard rank from RTDB cache (indexed)
