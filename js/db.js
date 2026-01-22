@@ -897,16 +897,20 @@ const DB = {
         const { forceRefresh = false } = options;
         let lastSynced = null;
         let stale = true;
+        let participantsSnap = null;
+        let cacheData = null;
         
         // Try RTDB cache first (cheap read)
         try {
-            const [participantsSnap, metadataSnap] = await Promise.all([
+            const [snap, metadataSnap] = await Promise.all([
                 this.rtdb.ref('adminCache/participants').once('value'),
                 this.rtdb.ref('adminCache/metadata').once('value')
             ]);
             
+            participantsSnap = snap;
+            
             if (participantsSnap.exists()) {
-                const cacheData = participantsSnap.val();
+                cacheData = participantsSnap.val();
                 const metadata = metadataSnap.exists() ? metadataSnap.val() : {};
                 lastSynced = metadata.lastUpdated || cacheData.lastUpdated || null;
                 const isFresh = lastSynced ? (Date.now() - lastSynced) < (10 * 60 * 1000) : false;
@@ -916,6 +920,7 @@ const DB = {
                     uid: u.uid,
                     email: u.email,
                     name: u.name,
+                    phone: u.phone || null,
                     district: u.district,
                     designation: u.designation,
                     points: u.points || 0,
@@ -943,41 +948,48 @@ const DB = {
             }
         } catch (error) {
             // Cache miss - fall through to Firestore only if forced
+            console.error('[getAllAttendees] RTDB cache read error:', error);
         }
         
         if (!forceRefresh) {
             // If cache is completely missing (first deploy), do read-through to Firestore
-            if (lastSynced === null && (!participantsSnap.exists() || (!cacheData.active && !cacheData.pending))) {
+            const cacheExists = participantsSnap && participantsSnap.exists();
+            const hasData = cacheData && (cacheData.active || cacheData.pending);
+            
+            if (lastSynced === null && (!cacheExists || !hasData)) {
                 console.log('[getAllAttendees] Cache empty on first access, doing read-through');
                 return await this.getAllAttendees({ forceRefresh: true });
             }
             // Otherwise return cached data (even if stale)
-            const active = Array.isArray(cacheData?.active) ? cacheData.active.map(u => ({
-                uid: u.uid,
-                email: u.email,
-                name: u.name,
-                district: u.district,
-                designation: u.designation,
-                points: u.points || 0,
-                photoURL: u.photoURL || u.photo,
-                status: u.status || 'active'
-            })) : [];
-            
-            const pending = Array.isArray(cacheData?.pending) ? cacheData.pending.map(p => ({
-                email: p.email,
-                name: p.name,
-                district: p.district,
-                designation: p.designation,
-                uid: null,
-                points: 0,
-                photoURL: p.photoURL || p.photo,
-                status: 'pending'
-            })) : [];
-            
-            const attendees = [...active, ...pending];
-            attendees.lastSynced = lastSynced;
-            attendees.stale = stale;
-            return attendees;
+            if (cacheData) {
+                const active = Array.isArray(cacheData.active) ? cacheData.active.map(u => ({
+                    uid: u.uid,
+                    email: u.email,
+                    name: u.name,
+                    phone: u.phone || null,
+                    district: u.district,
+                    designation: u.designation,
+                    points: u.points || 0,
+                    photoURL: u.photoURL || u.photo,
+                    status: u.status || 'active'
+                })) : [];
+                
+                const pending = Array.isArray(cacheData.pending) ? cacheData.pending.map(p => ({
+                    email: p.email,
+                    name: p.name,
+                    district: p.district,
+                    designation: p.designation,
+                    uid: null,
+                    points: 0,
+                    photoURL: p.photoURL || p.photo,
+                    status: 'pending'
+                })) : [];
+                
+                const attendees = [...active, ...pending];
+                attendees.lastSynced = lastSynced;
+                attendees.stale = stale;
+                return attendees;
+            }
         }
         
         // Explicit hard refresh (expensive - reads entire collections)

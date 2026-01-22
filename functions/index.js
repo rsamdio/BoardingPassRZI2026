@@ -341,6 +341,7 @@ async function updateAdminParticipantsCacheFromSnapshot(allAttendees, pendingUse
       uid: user.id,
       email: user.email,
       name: user.name,
+      phone: user.phone || null,
       district: user.district,
       designation: user.designation,
       points: user.points || 0,
