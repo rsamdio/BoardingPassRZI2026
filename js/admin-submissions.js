@@ -295,16 +295,28 @@ const AdminSubmissions = {
                 if (metadataSnap.exists()) {
                     const metadata = metadataSnap.val();
                     collection = metadata.collection || null;
+                    
+                    // Log warning if metadata exists but collection is missing (should not happen)
+                    if (!collection) {
+                        console.warn(`[loadFullSubmission] Metadata exists for ${submissionId} but collection field is missing. Falling back to 3-collection search.`);
+                    }
+                } else {
+                    // Log info if metadata is missing (may happen for old submissions)
+                    console.log(`[loadFullSubmission] Metadata not found for ${submissionId}, using fallback search.`);
                 }
             } catch (error) {
                 // Metadata read failed, fall through to 3-collection search
+                console.warn(`[loadFullSubmission] Error reading metadata for ${submissionId}:`, error);
             }
             
-            // If we have a collection hint, query that collection directly
+            // If we have a collection hint, query that collection directly (0-1 reads instead of 1-3)
             if (collection) {
                 const doc = await DB.db.collection(collection).doc(submissionId).get();
                 if (doc.exists) {
                     return { id: doc.id, ...doc.data() };
+                } else {
+                    // Collection hint was wrong, log warning and fall through to search
+                    console.warn(`[loadFullSubmission] Submission ${submissionId} not found in hinted collection '${collection}', searching all collections.`);
                 }
             }
             

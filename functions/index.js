@@ -2064,6 +2064,13 @@ async function updateSubmissionLists(submissionId, submissionData, changeType) {
       
       // Ensure status is always included and matches the byStatus path
       const finalStatus = status || submissionData.status || 'pending';
+      
+      // Verify collection is set correctly (defensive check)
+      if (!collection || (collection !== 'submissions' && collection !== 'formSubmissions' && collection !== 'quizSubmissions')) {
+        console.warn(`[updateSubmissionLists] Invalid collection determined for submission ${submissionId}: ${collection}. Defaulting to 'submissions'.`);
+        collection = 'submissions';
+      }
+      
       updates[`cache/admin/submissions/metadata/${submissionId}`] = {
         id: submissionId,
         userId,
@@ -2081,8 +2088,13 @@ async function updateSubmissionLists(submissionId, submissionData, changeType) {
         submittedAt: submissionData.submittedAt?.toMillis?.() || 
                     (submissionData.submittedAt ? new Date(submissionData.submittedAt).getTime() : Date.now()),
         points: submissionData.points || submissionData.pointsAwarded || 0,
-        collection: collection // Collection hint for fast client-side loading
+        collection: collection // Collection hint for fast client-side loading (CRITICAL for optimization)
       };
+      
+      // Log metadata creation for debugging (only in development or if collection is missing)
+      if (process.env.NODE_ENV === 'development' || !collection) {
+        console.log(`[updateSubmissionLists] Created metadata for submission ${submissionId} with collection: ${collection}`);
+      }
     } else {
       updates[`cache/admin/submissions/metadata/${submissionId}`] = null;
     }
@@ -2164,8 +2176,41 @@ async function updateLeaderboardIncremental(userId, oldPoints, newPoints) {
 /**
  * Refresh activities indexed cache from Firestore
  */
-async function refreshActivitiesIndexedCache() {
+async function refreshActivitiesIndexedCache(force = false) {
   try {
+    // Check cache freshness first (unless forced)
+    if (!force) {
+      try {
+        const TTL_MS = 5 * 60 * 1000; // 5 minutes TTL
+        const now = Date.now();
+        
+        // Check all three activity type metadata caches
+        const [quizzesMeta, tasksMeta, formsMeta] = await Promise.all([
+          rtdb.ref('cache/activities/quizzes/metadata').once('value'),
+          rtdb.ref('cache/activities/tasks/metadata').once('value'),
+          rtdb.ref('cache/activities/forms/metadata').once('value')
+        ]);
+        
+        // Check if all caches are fresh
+        const quizzesFresh = quizzesMeta.exists() && 
+          (now - (quizzesMeta.val()?.lastUpdated || 0)) < TTL_MS;
+        const tasksFresh = tasksMeta.exists() && 
+          (now - (tasksMeta.val()?.lastUpdated || 0)) < TTL_MS;
+        const formsFresh = formsMeta.exists() && 
+          (now - (formsMeta.val()?.lastUpdated || 0)) < TTL_MS;
+        
+        // If all caches are fresh, skip Firestore reads
+        if (quizzesFresh && tasksFresh && formsFresh) {
+          console.log('[refreshActivitiesIndexedCache] Cache is fresh, skipping Firestore reads');
+          return; // Cache is fresh, no need to read from Firestore
+        }
+      } catch (error) {
+        // Cache check failed, proceed with Firestore read (fallback)
+        console.warn('[refreshActivitiesIndexedCache] Cache freshness check failed, proceeding with Firestore read:', error);
+      }
+    }
+    
+    // Cache is stale or forced, read from Firestore
     const [quizzesSnapshot, tasksSnapshot, formsSnapshot] = await Promise.all([
       db.collection("quizzes").where("status", "==", "active").get(),
       db.collection("tasks").where("status", "==", "active").get(),
@@ -2256,9 +2301,9 @@ exports.scheduledCacheRefresh = onSchedule(
     async (event) => {
       
       try {
-        // Refresh indexed caches
+        // Refresh indexed caches (force refresh for scheduled task)
         await Promise.all([
-          refreshActivitiesIndexedCache(),
+          refreshActivitiesIndexedCache(true), // Force refresh for scheduled task
           refreshLeaderboardCache(),
           refreshAdminStatsCache()
         ]);
@@ -2750,11 +2795,19 @@ exports.onUserDelete = onDocumentDeleted(
     async (event) => {
       const deletedUserData = event.data.data();
       const uid = event.params.uid;
-      
+
+      // Only process attendee users
+      if (deletedUserData.role !== "attendee") {
+        return null;
+      }
+
+      // Read users collection ONCE (shared read) - same pattern as onUserCreate
+      const allAttendeesSnapshot = await db.collection("users")
+          .where("role", "==", "attendee")
+          .get();
+
       const updates = [
-        updateLeaderboardCache(),
-        updateAdminParticipantsCache(),
-        updateAttendeeDirectoryCache(), // Clear from directory cache
+        updateAllUserCaches(allAttendeesSnapshot), // ✅ Uses shared read instead of 3 separate reads
         updateAdminStatsCache({
           totalUsers: -1,
           activeUsers: deletedUserData.status === 'active' ? -1 : 0
