@@ -1117,7 +1117,8 @@ const AdminForms = {
                 return;
             }
             
-            // Fetch pre-computed submission IDs (quick check)
+            // OPTIMIZATION: Use RTDB metadata cache for list/navigation (0 Firestore reads)
+            // Fetch pre-computed submission IDs
             const submissionIdsResult = await DB.readFromCache(`admin/submissions/byForm/${formId}`);
             const submissionIds = submissionIdsResult.data ? Object.keys(submissionIdsResult.data) : [];
             
@@ -1126,37 +1127,20 @@ const AdminForms = {
                 return;
             }
             
-            // Fetch full submissions from Firestore (needed for detailed view)
-            let submissionsSnapshot;
-            try {
-                submissionsSnapshot = await DB.db.collection('formSubmissions')
-                    .where('formId', '==', formId)
-                    .orderBy('submittedAt', 'desc')
-                    .get();
-            } catch (orderError) {
-                // OrderBy failed, sorting in memory
-                submissionsSnapshot = await DB.db.collection('formSubmissions')
-                    .where('formId', '==', formId)
-                    .get();
-            }
+            // Fetch metadata for each submission ID from RTDB cache (0 Firestore reads)
+            const metadataPromises = submissionIds.map(id => 
+                DB.readFromCache(`admin/submissions/metadata/${id}`)
+            );
+            const metadataResults = await Promise.all(metadataPromises);
             
-            let submissions = submissionsSnapshot.docs.map(doc => {
-                const data = doc.data();
-                return {
-                    id: doc.id,
-                    ...data
-                };
-            });
-            
-            // Sort by submittedAt if not already sorted
-            submissions.sort((a, b) => {
-                const aTime = Utils.timestampToMillis(a.submittedAt);
-                const bTime = Utils.timestampToMillis(b.submittedAt);
-                return bTime - aTime;
-            });
+            // Use metadata for navigation/list view
+            let submissionsMetadata = metadataResults
+                .map(r => r.data)
+                .filter(s => s !== null)
+                .sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
             
             // Get user details for submissions (from directory cache)
-            const userIds = [...new Set(submissions.map(s => s.userId))];
+            const userIds = [...new Set(submissionsMetadata.map(s => s.userId))];
             const usersMap = new Map();
             
             // Try attendeeCache/directory first (correct path)
@@ -1188,12 +1172,13 @@ const AdminForms = {
                 });
             }
             
-            // Store submissions data
+            // Store metadata for navigation and cache for full submissions
             this.currentFormSubmissions = {
                 form,
-                submissions,
+                submissions: submissionsMetadata, // Metadata for navigation
                 usersMap,
-                currentIndex: 0
+                currentIndex: 0,
+                _fullSubmissionsCache: new Map() // Cache for full submissions loaded from Firestore
             };
             
             // Render submissions view
@@ -1253,7 +1238,38 @@ const AdminForms = {
             return;
         }
         
-        const submission = submissions[currentIndex];
+        const submissionMetadata = submissions[currentIndex];
+        
+        // OPTIMIZATION: Load full submission from Firestore only when viewing detail (1 read instead of 30-100)
+        // Check cache first, then load from Firestore if needed
+        let fullSubmission = null;
+        if (this.currentFormSubmissions._fullSubmissionsCache && 
+            this.currentFormSubmissions._fullSubmissionsCache.has(submissionMetadata.id)) {
+            fullSubmission = this.currentFormSubmissions._fullSubmissionsCache.get(submissionMetadata.id);
+        } else {
+            // Load from Firestore (1 read per submission viewed)
+            try {
+                const doc = await DB.db.collection('formSubmissions').doc(submissionMetadata.id).get();
+                if (doc.exists) {
+                    fullSubmission = { id: doc.id, ...doc.data() };
+                    // Cache for future navigation
+                    if (!this.currentFormSubmissions._fullSubmissionsCache) {
+                        this.currentFormSubmissions._fullSubmissionsCache = new Map();
+                    }
+                    this.currentFormSubmissions._fullSubmissionsCache.set(submissionMetadata.id, fullSubmission);
+                } else {
+                    // Fallback to metadata if Firestore read fails
+                    fullSubmission = submissionMetadata;
+                }
+            } catch (error) {
+                console.error('Error loading full submission:', error);
+                // Fallback to metadata
+                fullSubmission = submissionMetadata;
+            }
+        }
+        
+        // Use full submission if available, otherwise fall back to metadata
+        const submission = fullSubmission || submissionMetadata;
         const userData = usersMap.get(submission.userId);
         
         // Build user info with fallbacks

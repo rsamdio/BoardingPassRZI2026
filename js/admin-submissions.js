@@ -452,18 +452,28 @@ const AdminSubmissions = {
                             fullSubmissionsMap.set(doc.id, { id: doc.id, ...doc.data() });
                         });
                         
-                        // Check which IDs weren't found in submissions, try formSubmissions
+                        // Check which IDs weren't found in submissions
                         const foundIds = new Set(submissionsSnapshot.docs.map(d => d.id));
                         const missingIds = batch.filter(id => !foundIds.has(id));
                         
                         if (missingIds.length > 0) {
-                            const formSubmissionsSnapshot = await DB.db.collection('formSubmissions')
-                                .where(firebase.firestore.FieldPath.documentId(), 'in', missingIds)
-                                .get();
+                            // OPTIMIZATION: Use RTDB metadata cache instead of Firestore reads
+                            // Metadata already contains all data needed for list view
+                            const metadataPromises = missingIds.map(id => 
+                                DB.readFromCache(`admin/submissions/metadata/${id}`)
+                            );
+                            const metadataResults = await Promise.all(metadataPromises);
                             
-                            formSubmissionsSnapshot.docs.forEach(doc => {
-                                fullSubmissionsMap.set(doc.id, { id: doc.id, ...doc.data() });
+                            // Use metadata for list view (0 Firestore reads)
+                            metadataResults.forEach(result => {
+                                if (result.data) {
+                                    // Metadata has all fields needed for list view
+                                    fullSubmissionsMap.set(result.data.id, result.data);
+                                }
                             });
+                            
+                            // Note: If full document data is needed (e.g., formData), 
+                            // it will be loaded on-demand when viewing submission details
                         }
                     } catch (error) {
                         // Log error but don't fail entire batch - continue with other batches

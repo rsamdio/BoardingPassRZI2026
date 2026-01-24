@@ -2162,11 +2162,13 @@ async function updateLeaderboardIncremental(userId, oldPoints, newPoints) {
   try {
     if (oldPoints === newPoints) return;
     
-    // Update user rank
-    await updateUserRank(userId, newPoints);
+    // OPTIMIZATION: Read users collection once and update all user caches
+    // This replaces the deprecated updateUserRank() call and eliminates duplicate read
+    const allAttendeesSnapshot = await db.collection("users")
+        .where("role", "==", "attendee")
+        .get();
     
-    // Update leaderboard cache
-    await updateLeaderboardCache();
+    await updateAllUserCaches(allAttendeesSnapshot);
   } catch (error) {
     console.error(`Error updating leaderboard incrementally for ${userId}:`, error);
     // Non-critical
@@ -2241,9 +2243,45 @@ async function refreshActivitiesIndexedCache(force = false) {
 /**
  * Refresh leaderboard cache
  */
-async function refreshLeaderboardCache() {
+async function refreshLeaderboardCache(force = false) {
   try {
-    await updateLeaderboardCache();
+    // OPTIMIZATION: Check cache freshness first (unless forced)
+    if (!force) {
+      try {
+        const TTL_MS = 10 * 60 * 1000; // 10 minutes TTL
+        const now = Date.now();
+        
+        const metadataSnap = await rtdb.ref('cache/leaderboard/metadata').once('value');
+        
+        // Check if cache is fresh
+        if (metadataSnap.exists()) {
+          const metadata = metadataSnap.val();
+          const lastUpdated = metadata.lastUpdated || 0;
+          
+          if ((now - lastUpdated) < TTL_MS) {
+            console.log('[refreshLeaderboardCache] Cache is fresh, skipping Firestore read');
+            return; // Cache is fresh, no need to read from Firestore
+          }
+        }
+      } catch (error) {
+        // Cache check failed, proceed with Firestore read (fallback)
+        console.warn('[refreshLeaderboardCache] Cache freshness check failed, proceeding with Firestore read:', error);
+      }
+    }
+    
+    // Cache is stale or forced, read from Firestore once and update cache
+    const usersSnapshot = await db.collection("users")
+        .where("role", "==", "attendee")
+        .where("status", "==", "active")
+        .orderBy("points", "desc")
+        .get();
+    
+    const activeAttendees = usersSnapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+    
+    await updateLeaderboardCacheFromSnapshot(activeAttendees);
   } catch (error) {
     console.error("Error refreshing leaderboard cache:", error);
     throw error;
@@ -2304,7 +2342,7 @@ exports.scheduledCacheRefresh = onSchedule(
         // Refresh indexed caches (force refresh for scheduled task)
         await Promise.all([
           refreshActivitiesIndexedCache(true), // Force refresh for scheduled task
-          refreshLeaderboardCache(),
+          refreshLeaderboardCache(true), // Force refresh during scheduled run
           refreshAdminStatsCache()
         ]);
         
@@ -3814,31 +3852,30 @@ async function migrateUserPreComputedLists() {
 async function migrateLeaderboard() {
   
   try {
-    await updateLeaderboardCache();
-    
-    // Also update ranks and stats for all users
+    // OPTIMIZATION: Read users collection once and use snapshot for both operations
     const usersSnapshot = await db.collection("users")
         .where("role", "==", "attendee")
         .where("status", "==", "active")
+        .orderBy("points", "desc")
         .get();
     
+    const activeAttendees = usersSnapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+    
+    // Update leaderboard cache using snapshot (eliminates duplicate read)
+    await updateLeaderboardCacheFromSnapshot(activeAttendees);
+    
+    // Also update stats cache for all users
     const updatePromises = usersSnapshot.docs.map(async (doc) => {
       const userId = doc.id;
-      const userData = doc.data();
-      
-      // Update rank
-      await updateUserRank(userId, userData.points || 0);
       
       // Update stats cache
       await updateUserStatsCache(userId);
     });
     
     await Promise.all(updatePromises);
-    
-    await rtdb.ref("cache/leaderboard/metadata").set({
-      lastUpdated: Date.now(),
-      version: 1
-    });
     
   } catch (error) {
     console.error("Error migrating leaderboard:", error);
@@ -3852,9 +3889,14 @@ async function migrateLeaderboard() {
 async function migrateAdminData() {
   
   try {
+    // OPTIMIZATION: Read users collection once and use updateAllUserCaches
+    const allAttendeesSnapshot = await db.collection("users")
+        .where("role", "==", "attendee")
+        .get();
+    
     // Update admin caches
     await Promise.all([
-      updateAdminParticipantsCache(),
+      updateAllUserCaches(allAttendeesSnapshot), // Updates leaderboard, participants, and directory in one go
       updateAdminStatsCache(),
       updateQuizzesCache(),
       updateTasksCache(),
@@ -4021,10 +4063,15 @@ exports.initializeCaches = onCall(
       const steps = [];
       
       try {
-        // Step 1: Populate directory cache first (needed for pre-compute)
+        // Step 1: Populate all user caches (directory, leaderboard, participants) in one go
         try {
-          await updateAttendeeDirectoryCache();
-          steps.push("Step 1: Directory cache populated");
+          // OPTIMIZATION: Read users once and update all user caches
+          const allAttendeesSnapshot = await db.collection("users")
+              .where("role", "==", "attendee")
+              .get();
+          
+          await updateAllUserCaches(allAttendeesSnapshot); // Updates directory, leaderboard, and participants
+          steps.push("Step 1: All user caches populated (directory, leaderboard, participants)");
         } catch (error) {
           console.error("Step 1 failed:", error);
           steps.push(`Step 1 FAILED: ${error.message}`);
