@@ -9,6 +9,7 @@ const AdminForms = {
     currentStep: 1,
     totalSteps: 2,
     formsListener: null, // Real-time listener for forms cache
+    _pendingSubmissions: null, // Will be initialized as Map when needed
     currentFormSubmissions: {
         form: null,
         submissions: [],
@@ -1242,30 +1243,56 @@ const AdminForms = {
         
         // OPTIMIZATION: Load full submission from Firestore only when viewing detail (1 read instead of 30-100)
         // Check cache first, then load from Firestore if needed
+        // Initialize pending requests map if needed
+        if (!this._pendingSubmissions) {
+            this._pendingSubmissions = new Map();
+        }
+
+        // Clean up old entries periodically to prevent memory leak (keep last 50)
+        if (this._pendingSubmissions.size > 50) {
+            const entries = Array.from(this._pendingSubmissions.entries());
+            // Keep most recent 50, remove older ones
+            this._pendingSubmissions = new Map(entries.slice(-50));
+        }
+
         let fullSubmission = null;
-        if (this.currentFormSubmissions._fullSubmissionsCache && 
-            this.currentFormSubmissions._fullSubmissionsCache.has(submissionMetadata.id)) {
+
+        // Check cache first
+        if (this.currentFormSubmissions._fullSubmissionsCache?.has(submissionMetadata.id)) {
             fullSubmission = this.currentFormSubmissions._fullSubmissionsCache.get(submissionMetadata.id);
-        } else {
-            // Load from Firestore (1 read per submission viewed)
+        } else if (this._pendingSubmissions.has(submissionMetadata.id)) {
+            // Request already in progress, wait for it
             try {
-                const doc = await DB.db.collection('formSubmissions').doc(submissionMetadata.id).get();
-                if (doc.exists) {
-                    fullSubmission = { id: doc.id, ...doc.data() };
-                    // Cache for future navigation
-                    if (!this.currentFormSubmissions._fullSubmissionsCache) {
-                        this.currentFormSubmissions._fullSubmissionsCache = new Map();
-                    }
-                    this.currentFormSubmissions._fullSubmissionsCache.set(submissionMetadata.id, fullSubmission);
-                } else {
-                    // Fallback to metadata if Firestore read fails
-                    fullSubmission = submissionMetadata;
-                }
+                fullSubmission = await this._pendingSubmissions.get(submissionMetadata.id);
             } catch (error) {
-                console.error('Error loading full submission:', error);
-                // Fallback to metadata
+                console.error('Error loading full submission (from pending):', error);
                 fullSubmission = submissionMetadata;
             }
+        } else {
+            // Start new request
+            const requestPromise = DB.db.collection('formSubmissions').doc(submissionMetadata.id).get()
+                .then(doc => {
+                    this._pendingSubmissions.delete(submissionMetadata.id);
+                    if (doc.exists) {
+                        const submission = { id: doc.id, ...doc.data() };
+                        // Initialize cache if needed
+                        if (!this.currentFormSubmissions._fullSubmissionsCache) {
+                            this.currentFormSubmissions._fullSubmissionsCache = new Map();
+                        }
+                        this.currentFormSubmissions._fullSubmissionsCache.set(submissionMetadata.id, submission);
+                        return submission;
+                    }
+                    return submissionMetadata;
+                })
+                .catch(error => {
+                    this._pendingSubmissions.delete(submissionMetadata.id);
+                    console.error('Error loading full submission:', error);
+                    return submissionMetadata; // Return metadata as fallback
+                });
+          
+            // Store promise in pending map
+            this._pendingSubmissions.set(submissionMetadata.id, requestPromise);
+            fullSubmission = await requestPromise;
         }
         
         // Use full submission if available, otherwise fall back to metadata

@@ -198,23 +198,25 @@ async function updateLeaderboardCacheFromSnapshot(activeAttendees) {
       }
     }
 
-    // Persist leaderboard and rank caches
-    await Promise.all([
-      rtdb.ref("leaderboard/top50").set(leaderboardData),
-      rtdb.ref("cache/leaderboard/top50").set(leaderboardData),
-      rtdb.ref().update(rankUpdates),
-    ]);
-    
-    // Update metadata
+    // Read metadata first (before building updates)
     const metadataRef = rtdb.ref("cache/leaderboard/metadata");
     const existingMetaSnap = await metadataRef.once("value");
     const existingMeta = existingMetaSnap.val() || {};
 
-    await metadataRef.set({
-      lastUpdated: Date.now(),
-      version: (existingMeta.version || 0) + 1,
-      count: index,
-    });
+    // Build all updates including metadata
+    const allUpdates = {
+      "leaderboard/top50": leaderboardData,
+      "cache/leaderboard/top50": leaderboardData,
+      "cache/leaderboard/metadata": {
+        lastUpdated: Date.now(),
+        version: (existingMeta.version || 0) + 1,
+        count: index,
+      },
+      ...rankUpdates
+    };
+
+    // Single atomic update
+    await rtdb.ref().update(allUpdates);
   } catch (error) {
     console.error("Error updating leaderboard cache from snapshot:", error);
     // Non-critical, don't throw
@@ -330,8 +332,17 @@ async function updateAdminParticipantsCache(force = false, allAttendeesPrefetche
 async function updateAdminParticipantsCacheFromSnapshot(allAttendees, pendingUsersPrefetched, pendingMetadata = {}) {
   try {
     let pendingUsers = pendingUsersPrefetched;
-    // Fetch pending users if not provided
-    if (!pendingUsers) {
+    pendingMetadata = pendingMetadata || {};
+
+    // Validate prefetched data freshness (5 minute threshold)
+    const PENDING_USERS_TTL = 5 * 60 * 1000; // 5 minutes
+    const now = Date.now();
+    const prefetchedAge = pendingMetadata.lastUpdated 
+      ? (now - pendingMetadata.lastUpdated) 
+      : Infinity;
+
+    if (!pendingUsers || prefetchedAge > PENDING_USERS_TTL) {
+      // Fetch fresh pending users
       const pendingResult = await refreshPendingUsers(true);
       pendingUsers = pendingResult.pendingUsers;
       pendingMetadata = pendingResult;
@@ -465,11 +476,41 @@ async function updateAllUserCaches(allAttendeesSnapshot) {
         (user) => (user.status || "active") === "active",
     );
 
-    await Promise.all([
+    const cacheNames = ['leaderboard', 'participants', 'directory'];
+    const results = await Promise.allSettled([
       updateLeaderboardCacheFromSnapshot(activeAttendees),
       updateAdminParticipantsCacheFromSnapshot(attendees),
       updateAttendeeDirectoryCacheFromSnapshot(activeAttendees),
     ]);
+
+    // Handle edge case: empty results array (unlikely but possible)
+    if (results.length === 0) {
+      console.warn('[updateAllUserCaches] No cache update results returned');
+      return; // Early exit
+    }
+
+    // Log any failures for monitoring (but don't throw - cache failures shouldn't break user operations)
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.error(
+          `[updateAllUserCaches] Failed to update ${cacheNames[index]} cache:`,
+          result.reason
+        );
+        // Optionally: Send to error tracking service for alerting
+      }
+    });
+
+    // Check if all failed - log critical error but DON'T throw (non-critical operation)
+    const allFailed = results.every(r => r.status === 'rejected');
+    if (allFailed) {
+      console.error('[updateAllUserCaches] CRITICAL: All cache updates failed', {
+        leaderboard: results[0]?.status === 'rejected' ? results[0].reason : null,
+        participants: results[1]?.status === 'rejected' ? results[1].reason : null,
+        directory: results[2]?.status === 'rejected' ? results[2].reason : null
+      });
+      // DO NOT throw - this function is called from user operations and must not break them
+      // Cache failures are logged for monitoring but don't block user operations
+    }
   } catch (error) {
     console.error("Error updating all user caches from snapshot:", error);
     // Non-critical, don't throw
@@ -700,24 +741,68 @@ async function updateAdminStatsCache(incrementalUpdate = null) {
     
     // If incremental update provided, apply it
     if (incrementalUpdate && currentStats && currentStats.initialized) {
-      // Apply incremental updates by reading current values and adding increments
-      const updatedStats = { ...currentStats };
-      Object.keys(incrementalUpdate).forEach(key => {
-        if (typeof incrementalUpdate[key] === 'number') {
-          // Increment/decrement numeric values
-          updatedStats[key] = (updatedStats[key] || 0) + incrementalUpdate[key];
-        } else {
-          // Direct assignment for non-numeric values
-          updatedStats[key] = incrementalUpdate[key];
+      // Use RTDB transaction for atomic updates with retry logic
+      const MAX_RETRIES = 3;
+      let retries = 0;
+      let committed = false;
+      
+      while (retries < MAX_RETRIES && !committed) {
+        try {
+          const transactionResult = await statsRef.transaction((current) => {
+            if (!current || !current.initialized) {
+              // Stats not initialized, abort transaction (will trigger full recalculation)
+              return undefined;
+            }
+            
+            const updated = { ...current };
+            Object.keys(incrementalUpdate).forEach(key => {
+              if (typeof incrementalUpdate[key] === 'number') {
+                // Atomic increment/decrement
+                updated[key] = (updated[key] || 0) + incrementalUpdate[key];
+              } else {
+                // Direct assignment for non-numeric values
+                updated[key] = incrementalUpdate[key];
+              }
+            });
+            
+            updated.lastUpdated = Date.now();
+            updated.version = (updated.version || 0) + 1;
+            return updated;
+          });
+          
+          if (transactionResult.committed) {
+            committed = true;
+            return; // Success - exit function
+          }
+          
+          // Transaction aborted (not an error, just conflict)
+          retries++;
+          if (retries < MAX_RETRIES) {
+            const backoffMs = 50 * Math.pow(2, retries - 1); // 50ms, 100ms, 200ms
+            await new Promise(resolve => setTimeout(resolve, backoffMs));
+            console.log(`[updateAdminStatsCache] Transaction aborted, retrying (${retries}/${MAX_RETRIES})...`);
+          }
+        } catch (error) {
+          // Transaction threw an error (different from abort - network issue, permission denied, etc.)
+          console.error('[updateAdminStatsCache] Transaction error:', error);
+          retries++;
+          if (retries < MAX_RETRIES) {
+            const backoffMs = 50 * Math.pow(2, retries - 1); // 50ms, 100ms, 200ms
+            await new Promise(resolve => setTimeout(resolve, backoffMs));
+          } else {
+            // All retries failed, fall through to full recalculation
+            break;
+          }
         }
-      });
+      }
       
-      // Always update lastUpdated and version
-      updatedStats.lastUpdated = Date.now();
-      updatedStats.version = (updatedStats.version || 0) + 1;
-      
-      await statsRef.set(updatedStats);
-      return;
+      // If all retries failed, log warning and fall through to full recalculation
+      if (!committed) {
+        console.warn('[updateAdminStatsCache] Transaction failed after retries, falling back to full recalculation');
+        // Proceed with full recalculation below
+      } else {
+        return; // Transaction succeeded
+      }
     }
     
     // If cache is fresh (< 15 minutes), skip full recalculation
@@ -2244,45 +2329,113 @@ async function refreshActivitiesIndexedCache(force = false) {
  * Refresh leaderboard cache
  */
 async function refreshLeaderboardCache(force = false) {
+  const lockRef = rtdb.ref('cache/leaderboard/_refreshLock');
+  const LOCK_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+  
   try {
-    // OPTIMIZATION: Check cache freshness first (unless forced)
+    // Try to acquire lock (unless forced)
     if (!force) {
+      const lockSnap = await lockRef.once('value');
+      if (lockSnap.exists()) {
+        const lockData = lockSnap.val();
+        const lockAge = Date.now() - (lockData.timestamp || 0);
+        
+        if (lockAge < LOCK_TIMEOUT) {
+          console.log('[refreshLeaderboardCache] Refresh already in progress, skipping');
+          return; // Another refresh is in progress
+        } else {
+          // Lock expired, clear it
+          console.warn('[refreshLeaderboardCache] Lock expired, clearing and proceeding');
+          await lockRef.remove();
+        }
+      }
+      
+      // Check cache freshness before acquiring lock
       try {
         const TTL_MS = 10 * 60 * 1000; // 10 minutes TTL
         const now = Date.now();
-        
         const metadataSnap = await rtdb.ref('cache/leaderboard/metadata').once('value');
         
-        // Check if cache is fresh
         if (metadataSnap.exists()) {
           const metadata = metadataSnap.val();
           const lastUpdated = metadata.lastUpdated || 0;
           
           if ((now - lastUpdated) < TTL_MS) {
             console.log('[refreshLeaderboardCache] Cache is fresh, skipping Firestore read');
-            return; // Cache is fresh, no need to read from Firestore
+            return; // Cache is fresh, no need to refresh
           }
         }
       } catch (error) {
-        // Cache check failed, proceed with Firestore read (fallback)
-        console.warn('[refreshLeaderboardCache] Cache freshness check failed, proceeding with Firestore read:', error);
+        console.warn('[refreshLeaderboardCache] Cache freshness check failed, proceeding:', error);
       }
     }
     
-    // Cache is stale or forced, read from Firestore once and update cache
-    const usersSnapshot = await db.collection("users")
-        .where("role", "==", "attendee")
-        .where("status", "==", "active")
-        .orderBy("points", "desc")
-        .get();
+    // Acquire lock
+    await lockRef.set({
+      timestamp: Date.now(),
+      pid: process.pid || 'unknown',
+      functionId: 'refreshLeaderboardCache'
+    });
     
-    const activeAttendees = usersSnapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
-    
-    await updateLeaderboardCacheFromSnapshot(activeAttendees);
+    try {
+      // Cache is stale or forced, read from Firestore once and update cache
+      const usersSnapshot = await db.collection("users")
+          .where("role", "==", "attendee")
+          .where("status", "==", "active")
+          .orderBy("points", "desc")
+          .get();
+      
+      const activeAttendees = usersSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+      
+      await updateLeaderboardCacheFromSnapshot(activeAttendees);
+    } finally {
+      // Always release lock with retry logic
+      let lockRemoved = false;
+      let removeRetries = 0;
+      const MAX_REMOVE_RETRIES = 3;
+      
+      while (!lockRemoved && removeRetries < MAX_REMOVE_RETRIES) {
+        try {
+          await lockRef.remove();
+          lockRemoved = true;
+        } catch (removeError) {
+          removeRetries++;
+          if (removeRetries < MAX_REMOVE_RETRIES) {
+            // Exponential backoff for lock removal retries: 100ms, 200ms, 400ms
+            const backoffMs = 100 * Math.pow(2, removeRetries - 1);
+            await new Promise(resolve => setTimeout(resolve, backoffMs));
+            console.warn(`[refreshLeaderboardCache] Lock removal failed, retrying (${removeRetries}/${MAX_REMOVE_RETRIES})...`);
+          } else {
+            console.error('[refreshLeaderboardCache] Failed to release lock after retries:', removeError);
+            // Lock will expire after LOCK_TIMEOUT (5 minutes), so not critical
+          }
+        }
+      }
+    }
   } catch (error) {
+    // Release lock on error (with retry logic)
+    let lockRemoved = false;
+    let removeRetries = 0;
+    const MAX_REMOVE_RETRIES = 3;
+    
+    while (!lockRemoved && removeRetries < MAX_REMOVE_RETRIES) {
+      try {
+        await lockRef.remove();
+        lockRemoved = true;
+      } catch (lockError) {
+        removeRetries++;
+        if (removeRetries < MAX_REMOVE_RETRIES) {
+          const backoffMs = 100 * Math.pow(2, removeRetries - 1);
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+        } else {
+          console.error('[refreshLeaderboardCache] Error releasing lock after retries:', lockError);
+          // Lock will expire after LOCK_TIMEOUT, so not critical
+        }
+      }
+    }
     console.error("Error refreshing leaderboard cache:", error);
     throw error;
   }
@@ -2693,10 +2846,14 @@ exports.onSubmissionUpdate = onDocumentUpdated(
         statusUpdates[`cache/admin/submissions/metadata/${event.params.submissionId}/status`] = after.status;
       }
       
-      // Apply status updates FIRST (remove from old path, update metadata)
-      // This must happen before updateSubmissionLists to ensure atomic updates
+      // Apply status updates (already atomic - no transaction needed)
       if (Object.keys(statusUpdates).length > 0) {
-        await rtdb.ref().update(statusUpdates);
+        try {
+          await rtdb.ref().update(statusUpdates); // ✅ Atomic for multiple paths
+        } catch (error) {
+          console.error('[onSubmissionUpdate] Failed to update status paths:', error);
+          // Continue with other updates - status update failure is logged but not blocking
+        }
       }
       
       // Prepare stats update for status changes
@@ -2713,6 +2870,7 @@ exports.onSubmissionUpdate = onDocumentUpdated(
         else if (after.status === 'rejected') statsUpdate.rejectedSubmissions = (statsUpdate.rejectedSubmissions || 0) + 1;
       }
       
+      // Then proceed with other updates using Promise.allSettled for graceful error handling
       const updates = [
         // 1. Update indexed submission cache (this will add to new status path)
         // Note: This happens AFTER old path removal to ensure atomic updates
@@ -2783,7 +2941,28 @@ exports.onSubmissionUpdate = onDocumentUpdated(
         }
       }
       
-      await Promise.all(updates);
+      // Use allSettled to handle partial failures gracefully
+      const results = await Promise.allSettled(updates);
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          const updateNames = [
+            'updateSubmissionLists',
+            'updateAdminStatsCache',
+            'updateRecentActivityCache',
+            'updateUserCompletion',
+            'updateUserStats',
+            'updateUserActivityLists',
+            'updateLeaderboardIncremental',
+            'updateSubmissionCountsCache',
+            'updateUserCompletionStatusCache',
+            'updateUserStatsCache'
+          ];
+          console.error(`[onSubmissionUpdate] ${updateNames[index] || `Update ${index}`} failed:`, result.reason);
+        }
+      });
+      
+      // Note: Status updates are already applied, so even if other updates fail,
+      // the cache will be partially updated. This is acceptable for cache consistency.
       return null;
     }
 );

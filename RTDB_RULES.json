@@ -28,7 +28,10 @@
         ".read": "auth != null"
       },
       "leaderboard": {
-        ".read": "auth != null"
+        ".read": "auth != null",
+        "_refreshLock": {
+          ".write": "auth != null && root.child('admins').child(auth.uid).exists()"
+        }
       },
       "admin": {
         ".read": "auth != null && root.child('admins').child(auth.uid).exists()"
