@@ -1183,7 +1183,7 @@ const AdminForms = {
             };
             
             // Render submissions view
-            this.renderFormSubmissionsView();
+            await this.renderFormSubmissionsView();
         } catch (error) {
             console.error('Error fetching form submissions:', error);
             Toast.error('Failed to load submissions: ' + error.message);
@@ -1193,7 +1193,7 @@ const AdminForms = {
     /**
      * Render form submissions view (step flow)
      */
-    renderFormSubmissionsView() {
+    async renderFormSubmissionsView() {
         const { form, submissions, usersMap, currentIndex } = this.currentFormSubmissions;
         
         const titleEl = document.getElementById('form-submissions-view-title');
@@ -1419,20 +1419,20 @@ const AdminForms = {
     /**
      * Navigate to previous form submission
      */
-    previousFormSubmission() {
+    async previousFormSubmission() {
         if (this.currentFormSubmissions.currentIndex > 0) {
             this.currentFormSubmissions.currentIndex--;
-            this.renderFormSubmissionsView();
+            await this.renderFormSubmissionsView();
         }
     },
     
     /**
      * Navigate to next form submission
      */
-    nextFormSubmission() {
+    async nextFormSubmission() {
         if (this.currentFormSubmissions.currentIndex < this.currentFormSubmissions.submissions.length - 1) {
             this.currentFormSubmissions.currentIndex++;
-            this.renderFormSubmissionsView();
+            await this.renderFormSubmissionsView();
         }
     },
     
