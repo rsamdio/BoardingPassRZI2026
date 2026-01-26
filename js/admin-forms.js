@@ -1215,7 +1215,7 @@ const AdminForms = {
         countEl.textContent = `${submissions.length} response${submissions.length !== 1 ? 's' : ''}`;
         
         // Store data for download
-        downloadBtn.onclick = () => this.downloadFormSubmissions(form, submissions, usersMap);
+        downloadBtn.onclick = async () => await this.downloadFormSubmissions(form, submissions, usersMap);
         
         // Update navigation
         currentEl.textContent = submissions.length > 0 ? currentIndex + 1 : 0;
@@ -1439,15 +1439,46 @@ const AdminForms = {
     /**
      * Download form submissions as CSV
      * @param {Object} form - Form object
-     * @param {Array} submissions - Array of submissions
+     * @param {Array} submissions - Array of submissions (metadata)
      * @param {Map} usersMap - Map of userId to user data
      */
-    downloadFormSubmissions(form, submissions, usersMap) {
+    async downloadFormSubmissions(form, submissions, usersMap) {
         try {
             if (submissions.length === 0) {
                 Toast.error('No responses to download');
                 return;
             }
+            
+            Toast.info('Loading full submission data for export...');
+            
+            // Load full submission data for all submissions
+            // First, check cache, then fetch from Firestore if needed
+            const fullSubmissions = await Promise.all(submissions.map(async (submissionMetadata) => {
+                // Check cache first
+                if (this.currentFormSubmissions._fullSubmissionsCache?.has(submissionMetadata.id)) {
+                    return this.currentFormSubmissions._fullSubmissionsCache.get(submissionMetadata.id);
+                }
+                
+                // Fetch from Firestore
+                try {
+                    const doc = await DB.db.collection('formSubmissions').doc(submissionMetadata.id).get();
+                    if (doc.exists) {
+                        const fullSubmission = { id: doc.id, ...doc.data() };
+                        // Cache it for future use
+                        if (!this.currentFormSubmissions._fullSubmissionsCache) {
+                            this.currentFormSubmissions._fullSubmissionsCache = new Map();
+                        }
+                        this.currentFormSubmissions._fullSubmissionsCache.set(submissionMetadata.id, fullSubmission);
+                        return fullSubmission;
+                    }
+                    // If doc doesn't exist, return metadata as fallback
+                    return submissionMetadata;
+                } catch (error) {
+                    console.error(`Error loading submission ${submissionMetadata.id}:`, error);
+                    // Return metadata as fallback
+                    return submissionMetadata;
+                }
+            }));
             
             // Build CSV header
             const headers = ['Participant Name', 'Email', 'Submitted Date'];
@@ -1459,8 +1490,8 @@ const AdminForms = {
                 });
             }
             
-            // Build CSV rows
-            const rows = submissions.map(submission => {
+            // Build CSV rows using full submission data
+            const rows = fullSubmissions.map(submission => {
                 const user = usersMap.get(submission.userId) || { name: submission.userName || 'Unknown', email: 'N/A' };
                 const submittedDate = submission.submittedAt 
                     ? (submission.submittedAt.toDate ? submission.submittedAt.toDate() : new Date(submission.submittedAt))
