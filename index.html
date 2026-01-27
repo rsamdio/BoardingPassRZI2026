@@ -42,6 +42,7 @@
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-functions-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-messaging-compat.js"></script>
 
     <script>
         tailwind.config = {
@@ -417,6 +418,34 @@
                 </div>
             </div>
 
+            <!-- Notification Settings -->
+            <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-4 mb-4">
+                <h3 class="font-bold text-slate-800 mb-3 flex items-center gap-2">
+                    <i class="fas fa-bell text-rota-pink"></i>
+                    Push Notifications
+                </h3>
+                <div class="space-y-3">
+                    <div class="flex items-center justify-between">
+                        <div class="flex-1">
+                            <p class="text-sm font-medium text-slate-800">Enable Notifications</p>
+                            <p class="text-xs text-slate-500">Get notified about new missions and updates</p>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="notification-toggle" class="sr-only peer" onchange="handleNotificationToggle(event)">
+                            <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-rota-pink/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rota-pink"></div>
+                        </label>
+                    </div>
+                    <div id="notification-status" class="text-xs text-slate-500 flex items-center gap-2">
+                        <i class="fas fa-info-circle"></i>
+                        <span id="notification-status-text">Checking status...</span>
+                    </div>
+                    <button id="enable-notifications-btn" onclick="enableNotifications()" class="w-full bg-rota-pink text-white font-medium py-2 px-4 rounded-lg hover:bg-rose-700 transition-colors flex items-center justify-center gap-2 text-sm hidden">
+                        <i class="fas fa-bell"></i>
+                        Enable Push Notifications
+                    </button>
+                </div>
+            </div>
+
             <!-- Sign Out -->
             <button onclick="handleLogout()" class="w-full border-2 border-red-200 text-red-600 font-bold py-3 rounded-xl hover:bg-red-50 transition-colors mb-4">
                 Sign Out
@@ -569,6 +598,8 @@
     <!-- Scripts -->
     <script src="js/config.js"></script>
     <script src="js/cache.js"></script>
+    <script src="js/fcm-notifications.js"></script>
+    <script src="js/notification-settings.js"></script>
     <script src="js/memory-cache.js"></script>
     <script src="js/utils.js"></script>
     <script src="js/toast.js"></script>
@@ -582,5 +613,82 @@
     <script src="js/task.js"></script>
     <script src="js/forms.js"></script>
     <script src="js/app.js"></script>
+    
+    <script>
+        // Global functions for notification settings
+        async function enableNotifications() {
+            if (typeof FCMNotifications === 'undefined') {
+                Toast.error('Notification service not available');
+                return;
+            }
+            
+            const btn = document.getElementById('enable-notifications-btn');
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Enabling...';
+            }
+            
+            try {
+                // Force prompt if permission was previously denied
+                const result = await FCMNotifications.init(true);
+                if (result.success) {
+                    Toast.success('Push notifications enabled! You will receive notifications even when the app is closed.');
+                    if (typeof UI !== 'undefined' && UI.loadNotificationSettings) {
+                        await UI.loadNotificationSettings();
+                    }
+                } else {
+                    let errorMsg = 'Failed to enable notifications';
+                    if (result.reason === 'permission_denied') {
+                        errorMsg = 'Notification permission was denied. Please enable it in your browser settings.';
+                    } else if (result.reason === 'vapid_key_not_configured') {
+                        errorMsg = 'Notification service is not configured. Please contact support.';
+                    }
+                    Toast.error(errorMsg);
+                }
+            } catch (error) {
+                console.error('Error enabling notifications:', error);
+                Toast.error('Failed to enable notifications');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-bell"></i> Enable Push Notifications';
+                }
+            }
+        }
+        
+        async function handleNotificationToggle(event) {
+            const isEnabled = event.target.checked;
+            
+            if (isEnabled) {
+                // Enable notifications - force prompt if needed
+                await enableNotifications();
+            } else {
+                // Disable notifications - explicitly set notificationEnabled to false
+                if (typeof FCMNotifications !== 'undefined' && FCMNotifications.deleteToken) {
+                    try {
+                        // Delete token and explicitly mark as disabled
+                        await FCMNotifications.deleteToken();
+                        
+                        // Explicitly set notificationEnabled to false so it won't auto-enable on next login
+                        if (Auth && Auth.currentUser && DB && DB.db) {
+                            await DB.db.collection('users').doc(Auth.currentUser.uid).update({
+                                notificationEnabled: false
+                            });
+                        }
+                        
+                        Toast.success('Notifications disabled. They will not be automatically enabled on next login.');
+                        if (typeof UI !== 'undefined' && UI.loadNotificationSettings) {
+                            await UI.loadNotificationSettings();
+                        }
+                    } catch (error) {
+                        console.error('Error disabling notifications:', error);
+                        Toast.error('Failed to disable notifications');
+                        // Revert toggle
+                        event.target.checked = true;
+                    }
+                }
+            }
+        }
+    </script>
 </body>
 </html>

@@ -221,6 +221,37 @@ const App = {
         // Show welcome toast immediately
         showToast(`Welcome, ${Auth.currentUser.name.split(' ')[0]}!`);
         
+        // Initialize FCM notifications automatically (non-blocking)
+        // This enables background push notifications by default when user logs in
+        // Users will receive notifications even when app is closed, unless they explicitly disable
+        if (typeof FCMNotifications !== 'undefined') {
+            // Auto-enable notifications on login (default behavior)
+            FCMNotifications.init().then(result => {
+                if (result.success) {
+                    console.log('[App] FCM notifications auto-enabled - user will receive notifications even when app is closed');
+                    // Update notification status in profile if it's loaded
+                    if (typeof UI !== 'undefined' && UI.loadNotificationSettings) {
+                        setTimeout(() => UI.loadNotificationSettings(), 1000);
+                    }
+                } else if (result.reason === 'user_disabled') {
+                    console.log('[App] FCM notifications not enabled - user has explicitly disabled them');
+                    // Update status to show it's disabled by user choice
+                    if (typeof UI !== 'undefined' && UI.loadNotificationSettings) {
+                        setTimeout(() => UI.loadNotificationSettings(), 1000);
+                    }
+                } else {
+                    console.log('[App] FCM notifications not available:', result.reason);
+                    // Update status to show it's not enabled (permission denied, etc.)
+                    if (typeof UI !== 'undefined' && UI.loadNotificationSettings) {
+                        setTimeout(() => UI.loadNotificationSettings(), 1000);
+                    }
+                }
+            }).catch(error => {
+                console.error('[App] FCM initialization error:', error);
+                // Non-critical - app continues to work without push notifications
+            });
+        }
+        
         // Load data progressively in parallel - don't block UI
         // Home view will show skeleton loaders while data loads
         Promise.all([

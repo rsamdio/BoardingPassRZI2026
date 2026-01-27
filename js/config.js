@@ -17,5 +17,8 @@ if (typeof firebase !== 'undefined') {
 
 // App Configuration
 const CONFIG = {
-    delay: 800
+    delay: 800,
+    // FCM VAPID Key - Get from Firebase Console:
+    // Project Settings → Cloud Messaging → Web Push certificates → Generate key pair
+    FCM_VAPID_KEY: 'BJjTv0EJppthHi7EUASV-Z6E_YljSFH3ePKVk6A1A-q8taDa99v6qb1EOfOq2gUgkFiTyK5L_FrWzlNH8dbeAgU' // Uncomment and add your VAPID key here
 };

@@ -1335,6 +1335,9 @@ const UI = {
             
             // Render achievements
             this.renderProfileAchievements(userStats);
+            
+            // Load notification settings
+            this.loadNotificationSettings();
         } catch (error) {
             console.error('Error rendering profile:', error);
         } finally {
@@ -2270,6 +2273,49 @@ const UI = {
         } catch (error) {
             console.error('Error rendering forms:', error);
             formsList.innerHTML = '<p class="text-center text-slate-500 text-sm py-8">Failed to load forms. Please try again.</p>';
+        }
+    },
+    
+    /**
+     * Load and display notification settings in profile
+     */
+    async loadNotificationSettings() {
+        try {
+            if (typeof FCMNotifications === 'undefined') {
+                return;
+            }
+            
+            const isEnabled = await FCMNotifications.isEnabled();
+            const toggle = document.getElementById('notification-toggle');
+            const statusText = document.getElementById('notification-status-text');
+            const enableBtn = document.getElementById('enable-notifications-btn');
+            
+            if (toggle) {
+                toggle.checked = isEnabled;
+            }
+            
+            if (statusText) {
+                if (isEnabled) {
+                    statusText.textContent = 'Notifications are enabled. You will receive push notifications even when the app is closed.';
+                    statusText.classList.remove('text-slate-500');
+                    statusText.classList.add('text-green-600');
+                } else {
+                    statusText.textContent = 'Notifications are disabled. Enable to receive push notifications.';
+                    statusText.classList.remove('text-green-600');
+                    statusText.classList.add('text-slate-500');
+                }
+            }
+            
+            // Show enable button if notifications are not enabled
+            if (enableBtn) {
+                if (!isEnabled) {
+                    enableBtn.classList.remove('hidden');
+                } else {
+                    enableBtn.classList.add('hidden');
+                }
+            }
+        } catch (error) {
+            console.error('Error loading notification settings:', error);
         }
     }
 };

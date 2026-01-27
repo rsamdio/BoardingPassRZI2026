@@ -116,7 +116,8 @@ const AdminUI = {
             'form-detail': { title: 'Form Details', subtitle: 'View form information' },
             'form-submissions': { title: 'Form Responses', subtitle: 'Review form responses' },
             submissions: { title: 'Reviews', subtitle: 'Review and approve task submissions' },
-            leaderboard: { title: 'Leaderboard', subtitle: 'View rankings and points' }
+            leaderboard: { title: 'Leaderboard', subtitle: 'View rankings and points' },
+            notifications: { title: 'Notifications', subtitle: 'Send custom push notifications to users' }
         };
         
         const titleInfo = titles[viewId];
@@ -202,6 +203,12 @@ const AdminUI = {
                 case 'leaderboard':
                     if (typeof AdminLeaderboard !== 'undefined') {
                         await AdminLeaderboard.load();
+                    }
+                    break;
+                case 'notifications':
+                    // Notifications view doesn't need data loading, it's a form
+                    if (typeof AdminNotifications !== 'undefined') {
+                        AdminNotifications.init();
                     }
                     break;
                 default:

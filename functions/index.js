@@ -2797,7 +2797,6 @@ exports.onSubmissionCreate = onDocumentCreated(
       }
       
       // Step 2: Update other caches in parallel (non-blocking for user experience)
-      
       Promise.all([
         // Update user stats
         updateUserStats(userId),
@@ -2815,6 +2814,56 @@ exports.onSubmissionCreate = onDocumentCreated(
         console.error('Error updating secondary caches:', err);
         // Don't throw - user list is already updated
       });
+      
+      // Step 3: Create notification for submission created (confirmation)
+      if (taskId) {
+        try {
+          let taskTitle = submissionData.taskTitle || 'Task';
+          if (!taskTitle || taskTitle === 'Task') {
+            try {
+              const taskCacheRef = rtdb.ref(`adminCache/tasks/${taskId}`);
+              const taskCacheSnap = await taskCacheRef.once('value');
+              if (taskCacheSnap.exists()) {
+                taskTitle = taskCacheSnap.val()?.title || 'Task';
+              }
+            } catch (error) {
+              // Fallback to 'Task' if cache read fails
+            }
+          }
+          
+          // RTDB notification
+          updateUserNotificationCache(userId, {
+            type: 'submission_created',
+            title: 'Submission Received',
+            message: `Your submission for "${taskTitle}" has been received and is under review.`,
+            taskId: taskId,
+            taskTitle: taskTitle,
+            submissionId: event.params.submissionId
+          });
+          
+          // Push notification (non-blocking)
+          try {
+            await sendPushNotification(userId, {
+              type: 'submission_created',
+              title: 'Submission Received',
+              body: `Your submission for "${taskTitle}" has been received and is under review.`,
+              data: {
+                type: 'submission_created',
+                taskId: taskId,
+                taskTitle: taskTitle,
+                submissionId: event.params.submissionId,
+                url: `/tasks/${taskId}`
+              }
+            });
+          } catch (error) {
+            console.error('Error sending submission created push notification:', error);
+            // Non-critical
+          }
+        } catch (error) {
+          console.error('Error creating submission notification:', error);
+          // Non-critical, don't throw
+        }
+      }
       
       return null;
     }
@@ -2904,6 +2953,40 @@ exports.onSubmissionUpdate = onDocumentUpdated(
         updates.push(updateLeaderboardIncremental(userId, before.pointsAwarded || 0, after.pointsAwarded || 0));
       }
       
+      // Send push notification for points awarded (separate from approval notification)
+      if (pointsChanged && after.pointsAwarded > 0 && after.status === 'approved') {
+        try {
+          let taskTitle = after.taskTitle || 'Task';
+          if (!taskTitle || taskTitle === 'Task') {
+            try {
+              const taskCacheRef = rtdb.ref(`adminCache/tasks/${taskId}`);
+              const taskCacheSnap = await taskCacheRef.once('value');
+              if (taskCacheSnap.exists()) {
+                taskTitle = taskCacheSnap.val()?.title || 'Task';
+              }
+            } catch (error) {
+              // Fallback to 'Task' if cache read fails
+            }
+          }
+          
+          await sendPushNotification(userId, {
+            type: 'points_awarded',
+            title: 'Points Awarded!',
+            body: `You earned ${after.pointsAwarded} points for "${taskTitle}"!`,
+            data: {
+              type: 'points_awarded',
+              taskId: taskId,
+              taskTitle: taskTitle,
+              points: String(after.pointsAwarded),
+              url: `/tasks/${taskId}`
+            }
+          });
+        } catch (error) {
+          console.error('Error sending points awarded push notification:', error);
+          // Non-critical
+        }
+      }
+      
       // Update old caches (for backward compatibility)
       if (statusChanged) {
         updates.push(updateSubmissionCountsCache());
@@ -2926,18 +3009,65 @@ exports.onSubmissionUpdate = onDocumentUpdated(
         }
         
         if (after.status === 'approved') {
+          // RTDB notification (existing)
           updateUserNotificationCache(userId, {
             type: 'submission_approved',
             title: 'Submission Approved!',
             message: `Your submission for "${taskTitle}" has been approved. Points awarded!`,
-            points: after.pointsAwarded || 0
+            points: after.pointsAwarded || 0,
+            taskId: taskId,
+            taskTitle: taskTitle
           });
+          
+          // NEW: Push notification (non-blocking)
+          try {
+            await sendPushNotification(userId, {
+              type: 'submission_approved',
+              title: 'Submission Approved!',
+              body: `Your submission for "${taskTitle}" has been approved. ${after.pointsAwarded || 0} points awarded!`,
+              data: {
+                type: 'submission_approved',
+                taskId: taskId,
+                taskTitle: taskTitle,
+                points: String(after.pointsAwarded || 0),
+                url: `/tasks/${taskId}`
+              }
+            });
+          } catch (error) {
+            console.error('Error sending approval push notification:', error);
+            // Non-critical
+          }
         } else if (after.status === 'rejected') {
+          const rejectionReason = after.rejectionReason || 'Please review and resubmit.';
+          
+          // RTDB notification (existing)
           updateUserNotificationCache(userId, {
             type: 'submission_rejected',
             title: 'Submission Rejected',
-            message: `Your submission for "${taskTitle}" was rejected. You can resubmit.`
+            message: `Your submission for "${taskTitle}" was rejected. ${rejectionReason}`,
+            taskId: taskId,
+            taskTitle: taskTitle,
+            rejectionReason: rejectionReason,
+            canResubmit: true
           });
+          
+          // NEW: Push notification (non-blocking)
+          try {
+            await sendPushNotification(userId, {
+              type: 'submission_rejected',
+              title: 'Mission Resubmission Available',
+              body: `Your submission for "${taskTitle}" was rejected. You can resubmit now!`,
+              data: {
+                type: 'submission_rejected',
+                taskId: taskId,
+                taskTitle: taskTitle,
+                url: `/tasks/${taskId}`
+              }
+            });
+          } catch (error) {
+            console.error('Error sending rejection push notification:', error);
+            // Non-critical
+          }
         }
       }
       
@@ -3350,6 +3480,16 @@ exports.onTaskCreate = onDocumentCreated(
       const listUpdateStart = Date.now();
       await triggerUserActivityListUpdates(null, 'tasks');
       
+      // Step 3: Send push notifications for new pending missions (non-blocking)
+      if (taskData.status === 'active') {
+        try {
+          await sendPendingMissionNotification(taskId, taskData, 'new_task');
+        } catch (error) {
+          console.error('Error sending new task notifications:', error);
+          // Non-critical, don't throw
+        }
+      }
+      
       return null;
     }
 );
@@ -3384,6 +3524,16 @@ exports.onTaskUpdate = onDocumentUpdated(
         // If status changed to inactive, exclude it (it's being removed)
         const excludeId = newData.status !== 'active' ? taskId : null;
         await triggerUserActivityListUpdates(excludeId, 'tasks');
+      }
+      
+      // Step 3: Send push notification when task becomes active (non-blocking)
+      if (oldData.status !== 'active' && newData.status === 'active') {
+        try {
+          await sendPendingMissionNotification(taskId, newData, 'task_activated');
+        } catch (error) {
+          console.error('Error sending task activation notifications:', error);
+          // Non-critical, don't throw
+        }
       }
       
       return null;
@@ -3619,6 +3769,430 @@ async function updateUserNotificationCache(userId, notification) {
     // Non-critical, don't throw
   }
 }
+
+/**
+ * Send push notification to a single user
+ * @param {string} userId - User ID
+ * @param {Object} notification - Notification data
+ * @returns {Promise<string>} - FCM message ID
+ */
+async function sendPushNotification(userId, notification) {
+  if (!userId || !notification) return;
+  
+  try {
+    // Get user's FCM token (read-only operation)
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+      console.log(`[sendPushNotification] User ${userId} not found`);
+      return;
+    }
+    
+    const userData = userDoc.data();
+    const fcmToken = userData.fcmToken;
+    const notificationEnabled = userData.notificationEnabled !== false; // Default to true if not set
+    
+    if (!fcmToken || !notificationEnabled) {
+      console.log(`[sendPushNotification] User ${userId} has no FCM token or notifications disabled`);
+      return;
+    }
+    
+    // Check user preferences (read-only)
+    const prefs = userData.notificationPrefs || {};
+    const notificationType = notification.type || 'default';
+    
+    // Check if this notification type is enabled
+    if (notificationType.includes('pending') && prefs.pendingMissions === false) {
+      console.log(`[sendPushNotification] User ${userId} has pendingMissions disabled`);
+      return;
+    }
+    if (notificationType.includes('submission') && prefs.submissions === false) {
+      console.log(`[sendPushNotification] User ${userId} has submissions disabled`);
+      return;
+    }
+    if (notificationType.includes('engagement') && prefs.engagement === false) {
+      console.log(`[sendPushNotification] User ${userId} has engagement disabled`);
+      return;
+    }
+    
+    // Prepare FCM message
+    const message = {
+      notification: {
+        title: notification.title || 'Notification',
+        body: notification.body || notification.message || '',
+        imageUrl: notification.imageUrl
+      },
+      data: {
+        type: notification.type || 'default',
+        taskId: notification.data?.taskId || '',
+        taskTitle: notification.data?.taskTitle || '',
+        url: notification.data?.url || '/',
+        timestamp: Date.now().toString(),
+        ...notification.data
+      },
+      token: fcmToken,
+      webpush: {
+        fcmOptions: {
+          link: notification.data?.url || '/'
+        },
+        notification: {
+          icon: 'https://rzi2026chennai.firebaseapp.com/icon-192x192.png',
+          badge: 'https://rzi2026chennai.firebaseapp.com/badge-72x72.png',
+          requireInteraction: notification.requireInteraction || false
+        }
+      }
+    };
+    
+    // Send via FCM Admin SDK
+    const response = await admin.messaging().send(message);
+    console.log(`[sendPushNotification] Successfully sent to ${userId}:`, response);
+    
+    return response;
+  } catch (error) {
+    console.error(`[sendPushNotification] Error sending to ${userId}:`, error);
+    
+    // Handle invalid token - remove it (cleanup operation)
+    if (error.code === 'messaging/invalid-registration-token' || 
+        error.code === 'messaging/registration-token-not-registered') {
+      try {
+        // Use .update() with FieldValue.delete() to preserve other fields
+        await db.collection('users').doc(userId).update({
+          fcmToken: admin.firestore.FieldValue.delete(),
+          notificationEnabled: false
+        });
+        console.log(`[sendPushNotification] Removed invalid token for ${userId}`);
+      } catch (updateError) {
+        console.error(`[sendPushNotification] Error removing invalid token:`, updateError);
+      }
+    }
+    
+    // Don't throw - notification failures shouldn't break the calling function
+    return null;
+  }
+}
+
+/**
+ * Send push notification to all active users about new pending mission
+ * @param {string} taskId - Task ID
+ * @param {Object} taskData - Task data
+ * @param {string} notificationType - Type of notification ('new_task' or 'task_activated')
+ */
+async function sendPendingMissionNotification(taskId, taskData, notificationType = 'new_task') {
+  try {
+    // Get all active users with FCM tokens (read-only query)
+    const usersSnapshot = await db.collection('users')
+      .where('role', '==', 'attendee')
+      .where('status', '==', 'active')
+      .where('notificationEnabled', '==', true)
+      .get();
+    
+    if (usersSnapshot.empty) {
+      console.log('[sendPendingMissionNotification] No active users with notifications enabled');
+      return;
+    }
+    
+    const taskTitle = taskData.title || 'New Mission';
+    const points = taskData.points || 0;
+    
+    // Prepare notification message
+    const notification = {
+      type: notificationType,
+      title: 'New Mission Available!',
+      body: points > 0 
+        ? `"${taskTitle}" is now available. Earn ${points} points!`
+        : `"${taskTitle}" is now available. Check it out!`,
+      data: {
+        type: notificationType,
+        taskId: taskId,
+        taskTitle: taskTitle,
+        points: String(points),
+        url: `/tasks/${taskId}`
+      },
+      requireInteraction: false
+    };
+    
+    // Send to all users in parallel (with batching to avoid rate limits)
+    const BATCH_SIZE = 100; // FCM allows up to 500, but we'll be conservative
+    const users = usersSnapshot.docs;
+    
+    for (let i = 0; i < users.length; i += BATCH_SIZE) {
+      const batch = users.slice(i, i + BATCH_SIZE);
+      
+      const sendPromises = batch.map(async (userDoc) => {
+        const userId = userDoc.id;
+        const userData = userDoc.data();
+        
+        // Only send if user has FCM token
+        if (userData.fcmToken) {
+          try {
+            await sendPushNotification(userId, notification);
+          } catch (error) {
+            // Log but continue with other users
+            console.error(`[sendPendingMissionNotification] Error sending to ${userId}:`, error);
+          }
+        }
+      });
+      
+      await Promise.allSettled(sendPromises);
+      
+      // Small delay between batches to avoid rate limiting
+      if (i + BATCH_SIZE < users.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+    
+    console.log(`[sendPendingMissionNotification] Sent to ${users.length} users`);
+  } catch (error) {
+    console.error('[sendPendingMissionNotification] Error:', error);
+    // Don't throw - notification failures shouldn't break task creation/update
+  }
+}
+
+/**
+ * Get count of pending missions for a user
+ * @param {string} userId - User ID
+ * @returns {Promise<number>} - Count of pending missions
+ */
+async function getUserPendingMissionsCount(userId) {
+  try {
+    // Get user's pending activities from RTDB cache (read-only)
+    const pendingRef = rtdb.ref(`users/${userId}/activityLists/pending`);
+    const pendingSnap = await pendingRef.once('value');
+    
+    if (!pendingSnap.exists()) {
+      return 0;
+    }
+    
+    const pending = pendingSnap.val();
+    const tasks = pending.tasks || [];
+    const quizzes = pending.quizzes || [];
+    const forms = pending.forms || [];
+    
+    return tasks.length + quizzes.length + forms.length;
+  } catch (error) {
+    console.error(`[getUserPendingMissionsCount] Error for ${userId}:`, error);
+    return 0; // Return 0 on error to avoid blocking
+  }
+}
+
+/**
+ * Enhanced notification function that sends both RTDB and FCM
+ * @param {string} userId - User ID
+ * @param {Object} notification - Notification data
+ * @param {boolean} sendPush - Whether to send push notification (default: true)
+ */
+async function sendUserNotification(userId, notification, sendPush = true) {
+  // 1. Save to RTDB (for in-app notifications)
+  await updateUserNotificationCache(userId, notification);
+  
+  // 2. Send FCM push notification (if enabled)
+  if (sendPush) {
+    try {
+      await sendPushNotification(userId, {
+        ...notification,
+        body: notification.message || notification.body || '',
+        data: {
+          type: notification.type,
+          taskId: notification.taskId || '',
+          taskTitle: notification.taskTitle || '',
+          points: String(notification.points || 0),
+          url: notification.taskId ? `/tasks/${notification.taskId}` : '/'
+        }
+      });
+    } catch (error) {
+      console.error(`[sendUserNotification] Error sending push to ${userId}:`, error);
+      // Non-critical - RTDB notification still works
+    }
+  }
+}
+
+/**
+ * Scheduled function to send daily pending missions notifications
+ * Runs daily at 10 AM (configurable timezone)
+ * Only sends notifications to users who have pending missions
+ */
+exports.sendEngagementNotifications = onSchedule(
+  {
+    schedule: '0 10 * * *', // 10 AM daily (UTC)
+    timeZone: 'Asia/Kolkata', // Adjust to your timezone
+    region: region
+  },
+  async (event) => {
+    console.log('[sendEngagementNotifications] Starting daily pending missions notifications');
+    
+    try {
+      // Get all active users with notifications enabled (read-only query)
+      const usersSnapshot = await db.collection('users')
+        .where('role', '==', 'attendee')
+        .where('status', '==', 'active')
+        .where('notificationEnabled', '==', true)
+        .get();
+      
+      if (usersSnapshot.empty) {
+        console.log('[sendEngagementNotifications] No active users found');
+        return;
+      }
+      
+      let notificationsSent = 0;
+      let usersSkipped = 0;
+      
+      // Get pending missions count for each user and send notifications only if they have pending missions
+      const notificationPromises = usersSnapshot.docs.map(async (userDoc) => {
+        const userId = userDoc.id;
+        const userData = userDoc.data();
+        
+        if (!userData.fcmToken) {
+          usersSkipped++;
+          return; // Skip users without FCM token
+        }
+        
+        try {
+          // Get user's pending missions count (read-only RTDB operation)
+          const pendingCount = await getUserPendingMissionsCount(userId);
+          
+          // Only send notification if user has pending missions
+          if (pendingCount > 0) {
+            // User has pending missions - send notification
+            const notification = {
+              type: 'engagement_pending_missions',
+              title: 'Pending Missions Reminder',
+              body: `You have ${pendingCount} pending mission${pendingCount > 1 ? 's' : ''} waiting for you. Complete them to earn points!`,
+              data: {
+                type: 'engagement_pending_missions',
+                pendingCount: String(pendingCount),
+                url: '/missions'
+              }
+            };
+            
+            // Send push notification
+            await sendPushNotification(userId, notification);
+            notificationsSent++;
+          } else {
+            usersSkipped++;
+            // User has no pending missions - skip notification
+          }
+          
+        } catch (error) {
+          console.error(`[sendEngagementNotifications] Error for user ${userId}:`, error);
+          usersSkipped++;
+          // Continue with other users
+        }
+      });
+      
+      await Promise.allSettled(notificationPromises);
+      console.log(`[sendEngagementNotifications] Completed: ${notificationsSent} notifications sent, ${usersSkipped} users skipped`);
+      
+    } catch (error) {
+      console.error('[sendEngagementNotifications] Error:', error);
+      // Don't throw - scheduled functions should not fail silently, but we log the error
+    }
+  }
+);
+
+/**
+ * HTTP function to send custom engagement notifications
+ * Can be called manually or via cron job
+ * 
+ * Usage: POST https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/sendCustomEngagementNotifications
+ * Headers: Authorization: Bearer <admin-token>
+ * Body: { message: "Custom message", targetUsers: ["userId1", "userId2"] } (optional)
+ */
+exports.sendCustomEngagementNotifications = onRequest(
+  {
+    cors: true,
+    region: region
+  },
+  async (request, response) => {
+    // Verify admin authentication (basic check - can be enhanced)
+    if (!request.headers.authorization) {
+      response.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    
+    try {
+      const { title, message, targetUsers, notificationType = 'engagement_custom' } = request.body || {};
+      
+      // Validate required fields
+      if (!title || !message) {
+        response.status(400).json({ error: 'Title and message are required' });
+        return;
+      }
+      
+      let usersQuery = db.collection('users')
+        .where('role', '==', 'attendee')
+        .where('status', '==', 'active')
+        .where('notificationEnabled', '==', true);
+      
+      let usersSnapshot;
+      
+      // If specific users provided, filter by them
+      // Note: Firestore 'in' query limit is 10, so we handle larger arrays by filtering client-side
+      if (targetUsers && Array.isArray(targetUsers) && targetUsers.length > 0) {
+        if (targetUsers.length <= 10) {
+          // Use 'in' query for 10 or fewer users
+          usersQuery = usersQuery.where(admin.firestore.FieldPath.documentId(), 'in', targetUsers);
+          usersSnapshot = await usersQuery.get();
+        } else {
+          // For more than 10 users, fetch all and filter client-side
+          const allUsersSnapshot = await usersQuery.get();
+          const targetUsersSet = new Set(targetUsers);
+          // Filter to only target users
+          const filteredDocs = allUsersSnapshot.docs.filter(doc => targetUsersSet.has(doc.id));
+          // Create a query snapshot-like object
+          usersSnapshot = {
+            docs: filteredDocs,
+            empty: filteredDocs.length === 0,
+            size: filteredDocs.length,
+            forEach: function(callback) {
+              filteredDocs.forEach(callback);
+            }
+          };
+        }
+      } else {
+        usersSnapshot = await usersQuery.get();
+      }
+      
+      if (usersSnapshot.empty) {
+        response.json({ success: true, message: 'No users found', sent: 0 });
+        return;
+      }
+      
+      const sendPromises = usersSnapshot.docs.map(async (userDoc) => {
+        const userId = userDoc.id;
+        const userData = userDoc.data();
+        
+        if (!userData.fcmToken) {
+          return;
+        }
+        
+        try {
+          await sendPushNotification(userId, {
+            type: notificationType,
+            title: title,
+            body: message,
+            data: {
+              type: notificationType,
+              url: '/missions'
+            }
+          });
+        } catch (error) {
+          console.error(`[sendCustomEngagementNotifications] Error for ${userId}:`, error);
+        }
+      });
+      
+      await Promise.allSettled(sendPromises);
+      
+      response.json({
+        success: true,
+        message: 'Notifications sent',
+        sent: usersSnapshot.size
+      });
+      
+    } catch (error) {
+      console.error('[sendCustomEngagementNotifications] Error:', error);
+      response.status(500).json({ error: error.message });
+    }
+  }
+);
 
 /**
  * HTTP function to manually sync admins to RTDB
