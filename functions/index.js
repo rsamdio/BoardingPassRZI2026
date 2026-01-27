@@ -4059,7 +4059,7 @@ exports.sendEngagementNotifications = onSchedule(
               data: {
                 type: 'engagement_pending_missions',
                 pendingCount: String(pendingCount),
-                url: '/missions'
+                url: '/'
               }
             };
             
@@ -4171,7 +4171,7 @@ exports.sendCustomEngagementNotifications = onRequest(
             body: message,
             data: {
               type: notificationType,
-              url: '/missions'
+              url: '/'
             }
           });
         } catch (error) {
