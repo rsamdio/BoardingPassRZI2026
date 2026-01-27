@@ -57,7 +57,7 @@ const AdminUI = {
             // Remove active state from nav items
             document.querySelectorAll('.nav-item').forEach(item => {
                 item.classList.remove('bg-rota-pink', 'text-white');
-                item.classList.add('text-slate-700');
+                item.classList.add('text-slate-700', 'hover:bg-slate-100');
                 const icon = item.querySelector('i');
                 if (icon) {
                     icon.classList.remove('text-white');
@@ -76,7 +76,7 @@ const AdminUI = {
             const navItem = document.querySelector(`[data-view="${viewId}"]`);
             if (navItem) {
                 navItem.classList.add('bg-rota-pink', 'text-white');
-                navItem.classList.remove('text-slate-700');
+                navItem.classList.remove('text-slate-700', 'hover:bg-slate-100');
                 const icon = navItem.querySelector('i');
                 if (icon) {
                     icon.classList.add('text-white');
