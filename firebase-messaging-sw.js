@@ -25,8 +25,8 @@ messaging.onBackgroundMessage((payload) => {
   const notificationTitle = payload.notification?.title || 'New Notification';
   const notificationOptions = {
     body: payload.notification?.body || payload.data?.message || '',
-    icon: '/icon-192x192.png',
-    badge: '/badge-72x72.png',
+    icon: '/rzilogo.webp', // Use the Rotaract logo
+    badge: '/rzilogo.webp', // Use logo as badge too
     image: payload.notification?.image,
     data: payload.data || {},
     tag: payload.data?.type || 'default', // Group similar notifications

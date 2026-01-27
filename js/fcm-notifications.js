@@ -184,8 +184,8 @@ const FCMNotifications = {
       try {
         new Notification(notification.title || 'Notification', {
           body: notification.body || data.message,
-          icon: notification.icon || '/icon-192x192.png',
-          badge: '/badge-72x72.png',
+          icon: notification.icon || '/rzilogo.webp', // Use the Rotaract logo
+          badge: '/rzilogo.webp', // Use logo as badge too
           data: data
         });
       } catch (error) {

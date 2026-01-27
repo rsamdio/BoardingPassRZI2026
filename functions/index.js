@@ -3835,8 +3835,8 @@ async function sendPushNotification(userId, notification) {
           link: notification.data?.url || '/'
         },
         notification: {
-          icon: 'https://rzi2026chennai.firebaseapp.com/icon-192x192.png',
-          badge: 'https://rzi2026chennai.firebaseapp.com/badge-72x72.png',
+          icon: 'https://rzi2026chennai.firebaseapp.com/rzilogo.webp', // Use the Rotaract logo
+          badge: 'https://rzi2026chennai.firebaseapp.com/rzilogo.webp', // Use logo as badge too
           requireInteraction: notification.requireInteraction || false
         }
       }
