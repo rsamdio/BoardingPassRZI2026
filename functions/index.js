@@ -3815,6 +3815,7 @@ async function sendPushNotification(userId, notification) {
     }
     
     // Prepare FCM message
+    // Using notification + data approach for better browser compatibility
     const message = {
       notification: {
         title: notification.title || 'Notification',
@@ -3835,9 +3836,10 @@ async function sendPushNotification(userId, notification) {
           link: notification.data?.url || '/'
         },
         notification: {
-          icon: 'https://rzi2026chennai.firebaseapp.com/rzilogo.webp', // Use the Rotaract logo
-          badge: 'https://rzi2026chennai.firebaseapp.com/rzilogo.webp', // Use logo as badge too
+          icon: 'https://bp.rotaractinstitute.com/rzilogo.webp', // Use the Rotaract logo
+          badge: 'https://bp.rotaractinstitute.com/rzilogo.webp', // Use logo as badge too
           requireInteraction: notification.requireInteraction || false
+          // Not including 'actions' to avoid browser adding unsubscribe links
         }
       }
     };

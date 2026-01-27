@@ -30,8 +30,8 @@ messaging.onBackgroundMessage((payload) => {
     image: payload.notification?.image,
     data: payload.data || {},
     tag: payload.data?.type || 'default', // Group similar notifications
-    requireInteraction: payload.data?.requireInteraction || false,
-    actions: payload.data?.actions || []
+    requireInteraction: payload.data?.requireInteraction || false
+    // Note: Not including 'actions' to avoid browser adding unsubscribe links
   };
 
   return self.registration.showNotification(notificationTitle, notificationOptions);
