@@ -3815,31 +3815,40 @@ async function sendPushNotification(userId, notification) {
     }
     
     // Prepare FCM message
-    // Using notification + data approach for better browser compatibility
+    // Using data-only payload to ensure ALL messages go through service worker
+    // This provides consistent behavior whether app is open or closed
+    // Note: All data values must be strings in FCM data payloads
     const message = {
-      notification: {
-        title: notification.title || 'Notification',
-        body: notification.body || notification.message || '',
-        imageUrl: notification.imageUrl
-      },
+      // Data-only payload - service worker will handle showing the notification
       data: {
-        type: notification.type || 'default',
-        taskId: notification.data?.taskId || '',
-        taskTitle: notification.data?.taskTitle || '',
-        url: notification.data?.url || '/',
-        timestamp: Date.now().toString(),
-        ...notification.data
+        // Notification metadata first
+        type: String(notification.type || 'default'),
+        taskId: String(notification.data?.taskId || ''),
+        taskTitle: String(notification.data?.taskTitle || ''),
+        url: String(notification.data?.url || '/'),
+        timestamp: String(Date.now()),
+        // Additional data fields (convert all to strings, but exclude title/body to avoid conflicts)
+        ...Object.fromEntries(
+          Object.entries(notification.data || {})
+            .filter(([key]) => !['title', 'body', 'message'].includes(key)) // Exclude title/body from data
+            .map(([key, value]) => [key, String(value)])
+        ),
+        // Notification display fields LAST (so they're not overwritten by data spread)
+        title: String(notification.title || 'Notification'),
+        body: String(notification.body || notification.message || ''),
+        icon: 'https://bp.rotaractinstitute.com/rzilogo.webp',
+        badge: 'https://bp.rotaractinstitute.com/rzilogo.webp',
+        imageUrl: String(notification.imageUrl || ''),
+        requireInteraction: String(notification.requireInteraction || false)
       },
       token: fcmToken,
       webpush: {
         fcmOptions: {
           link: notification.data?.url || '/'
         },
-        notification: {
-          icon: 'https://bp.rotaractinstitute.com/rzilogo.webp', // Use the Rotaract logo
-          badge: 'https://bp.rotaractinstitute.com/rzilogo.webp', // Use logo as badge too
-          requireInteraction: notification.requireInteraction || false
-          // Not including 'actions' to avoid browser adding unsubscribe links
+        headers: {
+          Urgency: 'normal',
+          TTL: '86400' // 24 hours
         }
       }
     };

@@ -91,8 +91,9 @@ const FCMNotifications = {
         // Save token to user profile
         await this.saveTokenToUserProfile(token);
         
-        // Listen for foreground messages (when app is open)
-        this.setupForegroundListener();
+        // Note: Not setting up foreground listener - all notifications go through service worker
+        // This ensures consistent behavior whether app is open or closed
+        // Service worker handles all notifications via onBackgroundMessage
         
         // Listen for token refresh
         this.setupTokenRefresh();
@@ -148,49 +149,26 @@ const FCMNotifications = {
   
   /**
    * Listen for foreground messages (when app is open)
+   * DISABLED: We use service worker for all notifications (foreground and background)
+   * This ensures consistent behavior and prevents duplicates
    */
   setupForegroundListener() {
     if (!this.messaging) return;
     
+    // Don't set up foreground listener - let service worker handle all notifications
+    // This ensures consistent behavior whether app is open or closed
+    console.log('[FCM] Foreground listener disabled - using service worker for all notifications');
+    
+    // Optional: You can still listen for messages to update UI without showing notifications
+    // But we won't show browser notifications here to avoid duplicates
     try {
       this.messaging.onMessage((payload) => {
-        console.log('[FCM] Foreground message received:', payload);
-        
-        // Show in-app notification
-        this.showInAppNotification(payload);
+        console.log('[FCM] Message received (handled by service worker):', payload);
+        // Service worker will show the notification
+        // We can optionally update UI here if needed, but don't show notifications
       });
     } catch (error) {
-      console.error('[FCM] Error setting up foreground listener:', error);
-    }
-  },
-  
-  /**
-   * Show in-app notification when app is open
-   * @param {Object} payload - FCM message payload
-   */
-  showInAppNotification(payload) {
-    const notification = payload.notification || {};
-    const data = payload.data || {};
-    
-    // Use existing Toast system if available
-    if (typeof Toast !== 'undefined' && Toast.info) {
-      Toast.info(notification.body || data.message || 'New notification');
-    } else if (typeof showToast !== 'undefined') {
-      showToast(notification.body || data.message || 'New notification', 'info');
-    }
-    
-    // Optionally show browser notification even when app is open
-    if (Notification.permission === 'granted') {
-      try {
-        new Notification(notification.title || 'Notification', {
-          body: notification.body || data.message,
-          icon: notification.icon || '/rzilogo.webp', // Use the Rotaract logo
-          badge: '/rzilogo.webp', // Use logo as badge too
-          data: data
-        });
-      } catch (error) {
-        console.error('[FCM] Error showing browser notification:', error);
-      }
+      console.error('[FCM] Error setting up message listener:', error);
     }
   },
   

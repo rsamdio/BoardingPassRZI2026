@@ -18,22 +18,68 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
-// Handle background messages (when app is closed)
+// Handle ALL messages via service worker (both foreground and background)
+// Using data-only payload ensures all messages go through service worker
+// This provides consistent notification behavior regardless of app state
 messaging.onBackgroundMessage((payload) => {
-  console.log('[firebase-messaging-sw.js] Received background message:', payload);
+  console.log('[firebase-messaging-sw.js] Received message (handled by service worker):', payload);
+  console.log('[firebase-messaging-sw.js] Payload data:', JSON.stringify(payload.data));
   
-  const notificationTitle = payload.notification?.title || 'New Notification';
+  // Extract notification data from payload
+  // For data-only messages, all data is in payload.data (all values are strings)
+  // For notification messages, data is in payload.notification
+  const notificationTitle = payload.notification?.title || 
+                           payload.data?.title || 
+                           'New Notification';
+  
+  const notificationBody = payload.notification?.body || 
+                          payload.data?.body || 
+                          payload.data?.message ||
+                          '';
+  
+  console.log('[firebase-messaging-sw.js] Extracted title:', notificationTitle);
+  console.log('[firebase-messaging-sw.js] Extracted body:', notificationBody);
+  
+  // Use icon from data payload or default to logo
+  const iconUrl = payload.data?.icon || '/rzilogo.webp';
+  const badgeUrl = payload.data?.badge || '/rzilogo.webp';
+  
+  // Create unique tag using timestamp to prevent duplicates
+  const notificationTag = payload.data?.timestamp || 
+                         `${payload.data?.type || 'default'}-${Date.now()}`;
+  
+  // Prepare notification data (remove notification-specific fields from data)
+  const notificationData = {};
+  if (payload.data) {
+    Object.keys(payload.data).forEach(key => {
+      // Skip notification display fields, keep only data fields
+      if (!['title', 'body', 'message', 'icon', 'badge', 'imageUrl', 'requireInteraction'].includes(key)) {
+        notificationData[key] = payload.data[key];
+      }
+    });
+  }
+  
   const notificationOptions = {
-    body: payload.notification?.body || payload.data?.message || '',
-    icon: '/rzilogo.webp', // Use the Rotaract logo
-    badge: '/rzilogo.webp', // Use logo as badge too
-    image: payload.notification?.image,
-    data: payload.data || {},
-    tag: payload.data?.type || 'default', // Group similar notifications
-    requireInteraction: payload.data?.requireInteraction || false
+    body: notificationBody,
+    icon: iconUrl, // Use the Rotaract logo
+    badge: badgeUrl, // Use logo as badge too
+    image: payload.notification?.image || payload.data?.imageUrl,
+    data: notificationData, // Clean data without notification fields
+    tag: notificationTag, // Unique tag to prevent duplicates
+    requireInteraction: payload.data?.requireInteraction === 'true' || false,
+    renotify: false, // Don't renotify if same tag exists
+    silent: false
     // Note: Not including 'actions' to avoid browser adding unsubscribe links
   };
 
+  console.log('[firebase-messaging-sw.js] Showing notification:', {
+    title: notificationTitle,
+    body: notificationBody,
+    icon: iconUrl,
+    tag: notificationTag
+  });
+
+  // Show notification via service worker (works for both foreground and background)
   return self.registration.showNotification(notificationTitle, notificationOptions);
 });
 
