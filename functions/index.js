@@ -868,6 +868,14 @@ async function updateAdminStatsCache(incrementalUpdate = null) {
       version: (currentStats?.version || 0) + 1,
       initialized: true
     });
+
+    // Reuse same snapshots to refresh participants cache (no extra Firestore reads)
+    const allAttendees = usersSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const pendingUsersArray = pendingUsersSnapshot.docs.map((doc) => ({ email: doc.id, ...doc.data() }));
+    await updateAdminParticipantsCacheFromSnapshot(allAttendees, pendingUsersArray, {
+      pendingCount: pendingUsersSnapshot.size,
+      lastUpdated: Date.now()
+    });
   } catch (error) {
     console.error("Error updating admin stats cache:", error);
     // Non-critical, don't throw
@@ -2481,21 +2489,21 @@ async function debouncedUserListUpdate(userId, delay = 5000) {
 
 /**
  * Scheduled cache refresh function
- * Runs every 15 minutes to ensure cache consistency
+ * Runs once daily at midnight UTC to ensure cache consistency (event-driven updates keep cache fresh between runs)
  */
 exports.scheduledCacheRefresh = onSchedule(
     {
-      schedule: "*/15 * * * *", // Every 15 minutes
+      schedule: "0 0 * * *", // Once daily at midnight UTC
       region: region,
       timeZone: "UTC"
     },
     async (event) => {
       
       try {
-        // Refresh indexed caches (force refresh for scheduled task)
+        // Refresh indexed caches (respect TTL - only hit Firestore when cache is stale)
         await Promise.all([
-          refreshActivitiesIndexedCache(true), // Force refresh for scheduled task
-          refreshLeaderboardCache(true), // Force refresh during scheduled run
+          refreshActivitiesIndexedCache(false),
+          refreshLeaderboardCache(false),
           refreshAdminStatsCache()
         ]);
         
@@ -2599,6 +2607,11 @@ exports.onUserUpdate = onDocumentUpdated(
       // Always update user data cache when user is updated (for any changes)
       updates.push(updateUserDataCache(uid, after));
 
+      // Keep FCM recipients cache in sync when token or notification preference changes
+      if (before.fcmToken !== after.fcmToken || before.notificationEnabled !== after.notificationEnabled) {
+        updates.push(syncNotificationTokenToRTDB(uid, after));
+      }
+
       await Promise.all(updates);
       return null;
     }
@@ -2631,13 +2644,11 @@ exports.onUserCreate = onDocumentCreated(
           totalUsers: 1,
           activeUsers: userData.status === 'active' ? 1 : 0
         }),
-        // updateUserRank() removed - rank is calculated in updateLeaderboardCache()
         updateUserStatsCache(uid),
         updateUserCompletionStatusCache(uid),
-        // Generate pre-computed activity lists for the new user
         updateUserActivityLists(uid),
-        // Cache user data in RTDB for fast client-side access
         updateUserDataCache(uid, userData),
+        syncNotificationTokenToRTDB(uid, userData),
       ];
 
       if (userData.email) {
@@ -3865,11 +3876,11 @@ async function sendPushNotification(userId, notification) {
     if (error.code === 'messaging/invalid-registration-token' || 
         error.code === 'messaging/registration-token-not-registered') {
       try {
-        // Use .update() with FieldValue.delete() to preserve other fields
         await db.collection('users').doc(userId).update({
           fcmToken: admin.firestore.FieldValue.delete(),
           notificationEnabled: false
         });
+        await rtdb.ref(`cache/notifications/tokens/${userId}`).remove();
         console.log(`[sendPushNotification] Removed invalid token for ${userId}`);
       } catch (updateError) {
         console.error(`[sendPushNotification] Error removing invalid token:`, updateError);
@@ -3882,6 +3893,51 @@ async function sendPushNotification(userId, notification) {
 }
 
 /**
+ * Sync user FCM token and notification preferences to RTDB for notification sends (avoids Firestore reads).
+ * Call from onUserCreate / onUserUpdate when fcmToken or notificationEnabled changes.
+ */
+async function syncNotificationTokenToRTDB(uid, userData) {
+  try {
+    const ref = rtdb.ref(`cache/notifications/tokens/${uid}`);
+    const hasToken = !!(userData.fcmToken && userData.fcmToken.trim());
+    const enabled = userData.notificationEnabled !== false;
+    if (hasToken && enabled) {
+      await ref.set({
+        fcmToken: userData.fcmToken,
+        notificationEnabled: true,
+        status: userData.status || 'pending'
+      });
+    } else {
+      await ref.remove();
+    }
+  } catch (error) {
+    console.error(`[syncNotificationTokenToRTDB] Error for ${uid}:`, error);
+  }
+}
+
+/**
+ * Get list of notification recipients from RTDB cache (active attendees with token and notifications enabled).
+ * Returns array of { uid, fcmToken } or null if cache empty/invalid (caller should fall back to Firestore).
+ */
+async function getNotificationRecipientsFromRTDB(requireActive = true) {
+  try {
+    const snap = await rtdb.ref('cache/notifications/tokens').once('value');
+    if (!snap.exists()) return null;
+    const data = snap.val();
+    const entries = Object.entries(data || {}).filter(([_, v]) => v && v.fcmToken && (v.notificationEnabled !== false));
+    if (requireActive) {
+      return entries
+        .filter(([_, v]) => v.status === 'active')
+        .map(([uid, v]) => ({ uid, fcmToken: v.fcmToken }));
+    }
+    return entries.map(([uid, v]) => ({ uid, fcmToken: v.fcmToken }));
+  } catch (error) {
+    console.warn('[getNotificationRecipientsFromRTDB] Error:', error);
+    return null;
+  }
+}
+
+/**
  * Send push notification to all active users about new pending mission
  * @param {string} taskId - Task ID
  * @param {Object} taskData - Task data
@@ -3889,18 +3945,32 @@ async function sendPushNotification(userId, notification) {
  */
 async function sendPendingMissionNotification(taskId, taskData, notificationType = 'new_task') {
   try {
-    // Get all active users with FCM tokens (read-only query)
-    const usersSnapshot = await db.collection('users')
-      .where('role', '==', 'attendee')
-      .where('status', '==', 'active')
-      .where('notificationEnabled', '==', true)
-      .get();
-    
-    if (usersSnapshot.empty) {
+    // Prefer RTDB cache to avoid Firestore read
+    let recipients = await getNotificationRecipientsFromRTDB(true);
+    if (!recipients || recipients.length === 0) {
+      const usersSnapshot = await db.collection('users')
+        .where('role', '==', 'attendee')
+        .where('status', '==', 'active')
+        .where('notificationEnabled', '==', true)
+        .get();
+      if (usersSnapshot.empty) {
+        console.log('[sendPendingMissionNotification] No active users with notifications enabled');
+        return;
+      }
+      recipients = usersSnapshot.docs
+        .filter((d) => d.data().fcmToken)
+        .map((d) => ({ uid: d.id, fcmToken: d.data().fcmToken }));
+      // Backfill RTDB from Firestore result
+      await Promise.allSettled(
+        usersSnapshot.docs.map((d) => syncNotificationTokenToRTDB(d.id, d.data()))
+      );
+    }
+
+    if (recipients.length === 0) {
       console.log('[sendPendingMissionNotification] No active users with notifications enabled');
       return;
     }
-    
+
     const taskTitle = taskData.title || 'New Mission';
     const points = taskData.points || 0;
     
@@ -3921,37 +3991,24 @@ async function sendPendingMissionNotification(taskId, taskData, notificationType
       requireInteraction: false
     };
     
-    // Send to all users in parallel (with batching to avoid rate limits)
-    const BATCH_SIZE = 100; // FCM allows up to 500, but we'll be conservative
-    const users = usersSnapshot.docs;
-    
-    for (let i = 0; i < users.length; i += BATCH_SIZE) {
-      const batch = users.slice(i, i + BATCH_SIZE);
-      
-      const sendPromises = batch.map(async (userDoc) => {
-        const userId = userDoc.id;
-        const userData = userDoc.data();
-        
-        // Only send if user has FCM token
-        if (userData.fcmToken) {
-          try {
-            await sendPushNotification(userId, notification);
-          } catch (error) {
-            // Log but continue with other users
-            console.error(`[sendPendingMissionNotification] Error sending to ${userId}:`, error);
-          }
+    // Send to all recipients in parallel (with batching to avoid rate limits)
+    const BATCH_SIZE = 100;
+    for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
+      const batch = recipients.slice(i, i + BATCH_SIZE);
+      const sendPromises = batch.map(async (r) => {
+        try {
+          await sendPushNotification(r.uid, notification);
+        } catch (error) {
+          console.error(`[sendPendingMissionNotification] Error sending to ${r.uid}:`, error);
         }
       });
-      
       await Promise.allSettled(sendPromises);
-      
-      // Small delay between batches to avoid rate limiting
-      if (i + BATCH_SIZE < users.length) {
+      if (i + BATCH_SIZE < recipients.length) {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
     }
     
-    console.log(`[sendPendingMissionNotification] Sent to ${users.length} users`);
+    console.log(`[sendPendingMissionNotification] Sent to ${recipients.length} users`);
   } catch (error) {
     console.error('[sendPendingMissionNotification] Error:', error);
     // Don't throw - notification failures shouldn't break task creation/update
@@ -4122,81 +4179,68 @@ exports.sendCustomEngagementNotifications = onRequest(
     try {
       const { title, message, targetUsers, notificationType = 'engagement_custom' } = request.body || {};
       
-      // Validate required fields
       if (!title || !message) {
         response.status(400).json({ error: 'Title and message are required' });
         return;
       }
       
-      let usersQuery = db.collection('users')
-        .where('role', '==', 'attendee')
-        .where('status', '==', 'active')
-        .where('notificationEnabled', '==', true);
-      
-      let usersSnapshot;
-      
-      // If specific users provided, filter by them
-      // Note: Firestore 'in' query limit is 10, so we handle larger arrays by filtering client-side
-      if (targetUsers && Array.isArray(targetUsers) && targetUsers.length > 0) {
-        if (targetUsers.length <= 10) {
-          // Use 'in' query for 10 or fewer users
-          usersQuery = usersQuery.where(admin.firestore.FieldPath.documentId(), 'in', targetUsers);
-          usersSnapshot = await usersQuery.get();
-        } else {
-          // For more than 10 users, fetch all and filter client-side
-          const allUsersSnapshot = await usersQuery.get();
-          const targetUsersSet = new Set(targetUsers);
-          // Filter to only target users
-          const filteredDocs = allUsersSnapshot.docs.filter(doc => targetUsersSet.has(doc.id));
-          // Create a query snapshot-like object
-          usersSnapshot = {
-            docs: filteredDocs,
-            empty: filteredDocs.length === 0,
-            size: filteredDocs.length,
-            forEach: function(callback) {
-              filteredDocs.forEach(callback);
-            }
-          };
-        }
-      } else {
-        usersSnapshot = await usersQuery.get();
+      // Prefer RTDB cache to avoid Firestore read
+      let recipients = await getNotificationRecipientsFromRTDB(true);
+      if (recipients && targetUsers && Array.isArray(targetUsers) && targetUsers.length > 0) {
+        const targetSet = new Set(targetUsers);
+        recipients = recipients.filter((r) => targetSet.has(r.uid));
       }
       
-      if (usersSnapshot.empty) {
+      if (!recipients || recipients.length === 0) {
+        const usersQuery = db.collection('users')
+          .where('role', '==', 'attendee')
+          .where('status', '==', 'active')
+          .where('notificationEnabled', '==', true);
+        let usersSnapshot;
+        if (targetUsers && Array.isArray(targetUsers) && targetUsers.length > 0) {
+          if (targetUsers.length <= 10) {
+            usersSnapshot = await usersQuery.where(admin.firestore.FieldPath.documentId(), 'in', targetUsers).get();
+          } else {
+            const allSnap = await usersQuery.get();
+            const targetSet = new Set(targetUsers);
+            const filtered = allSnap.docs.filter((d) => targetSet.has(d.id));
+            usersSnapshot = { docs: filtered, empty: filtered.length === 0, size: filtered.length };
+          }
+        } else {
+          usersSnapshot = await usersQuery.get();
+        }
+        if (usersSnapshot.empty) {
+          response.json({ success: true, message: 'No users found', sent: 0 });
+          return;
+        }
+        recipients = usersSnapshot.docs
+          .filter((d) => d.data().fcmToken)
+          .map((d) => ({ uid: d.id, fcmToken: d.data().fcmToken }));
+        await Promise.allSettled(
+          usersSnapshot.docs.map((d) => syncNotificationTokenToRTDB(d.id, d.data()))
+        );
+      }
+      
+      if (!recipients || recipients.length === 0) {
         response.json({ success: true, message: 'No users found', sent: 0 });
         return;
       }
       
-      const sendPromises = usersSnapshot.docs.map(async (userDoc) => {
-        const userId = userDoc.id;
-        const userData = userDoc.data();
-        
-        if (!userData.fcmToken) {
-          return;
-        }
-        
+      const sendPromises = recipients.map(async (r) => {
         try {
-          await sendPushNotification(userId, {
+          await sendPushNotification(r.uid, {
             type: notificationType,
             title: title,
             body: message,
-            data: {
-              type: notificationType,
-              url: '/'
-            }
+            data: { type: notificationType, url: '/' }
           });
         } catch (error) {
-          console.error(`[sendCustomEngagementNotifications] Error for ${userId}:`, error);
+          console.error(`[sendCustomEngagementNotifications] Error for ${r.uid}:`, error);
         }
       });
       
       await Promise.allSettled(sendPromises);
-      
-      response.json({
-        success: true,
-        message: 'Notifications sent',
-        sent: usersSnapshot.size
-      });
+      response.json({ success: true, message: 'Notifications sent', sent: recipients.length });
       
     } catch (error) {
       console.error('[sendCustomEngagementNotifications] Error:', error);

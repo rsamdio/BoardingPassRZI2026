@@ -552,7 +552,7 @@ const DB = {
                 const cacheData = cacheSnap.val();
                 const lastUpdated = cacheData.lastUpdated || 0;
                 const now = Date.now();
-                const staleThreshold = 5 * 60 * 1000; // 5 minutes
+                const staleThreshold = 15 * 60 * 1000; // 15 minutes (reduces Firestore fallbacks)
                 
                 // Use cache if not stale
                 if (now - lastUpdated < staleThreshold) {
